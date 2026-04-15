@@ -7,16 +7,16 @@ Built as a pure plugin — **no modifications to CTFd core**.
 ## Screenshots
 
 ### Add a screenshot challenge
-![Add screenshot challenge](https://github.com/user-attachments/assets/77aa3f84-d61c-484f-9b19-8836e5de18bf)
+![Add screenshot challenge](docs/create_challenge.png)
 
 ### Approve or reject submissions
-![Approve or reject submissions](https://github.com/user-attachments/assets/25ba1e25-bf65-40c9-8504-7c89320323de)
+![Approve or reject submissions](docs/review_dashboard.png)
 
 ### Gallery / storage management
-![Gallery](https://github.com/user-attachments/assets/7f77a397-f9ae-418b-8ec3-6813f2bf1f10)
+![Gallery](docs/gallery.png)
 
 ### Student view — orange status for pending submissions
-![User view - orange pending status](https://github.com/user-attachments/assets/53c12ccd-5a84-4436-ad71-33b8b06372cb)
+![User view - orange pending status](docs/student_pending.png)
 
 ## Why
 
