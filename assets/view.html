@@ -1,0 +1,22 @@
+{% extends "challenge.html" %}
+
+{% block input %}
+  <input id="challenge-id" class="challenge-id" type="hidden" value="{{ challenge.id }}">
+  <div class="w-100">
+    <input
+        id="screenshot-file" class="form-control"
+        type="file" accept="image/*"
+    >
+    <small class="form-text text-muted mt-1">Upload a screenshot of your work</small>
+  </div>
+{% endblock %}
+
+{% block submit %}
+  <button
+      id="challenge-submit"
+      class="challenge-submit btn btn-outline-secondary w-100 h-100" type="submit"
+      @click.debounce.500ms="response = await window.__screenshotSubmit(id); await renderSubmissionResponse();"
+  >
+    Submit Screenshot
+  </button>
+{% endblock %}

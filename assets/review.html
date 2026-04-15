@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Screenshot Reviews - CTFd Admin</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; }
+        .review-card { transition: opacity 0.3s; }
+        .review-card.processed { opacity: 0.5; }
+        .screenshot-thumb {
+            max-width: 300px;
+            max-height: 200px;
+            cursor: pointer;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+        }
+        .screenshot-full {
+            max-width: 100%;
+            max-height: 80vh;
+        }
+        .status-pending { color: #fd7e14; font-weight: bold; }
+        .status-approved { color: #28a745; font-weight: bold; }
+        .status-rejected { color: #dc3545; font-weight: bold; }
+        .filter-bar { background: white; border-bottom: 1px solid #dee2e6; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-dark bg-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/admin">CTFd Admin</a>
+            <div>
+                <button class="btn btn-outline-light btn-sm me-2" onclick="showTab('reviews')" id="tab-reviews">Reviews</button>
+                <button class="btn btn-outline-light btn-sm" onclick="showTab('gallery')" id="tab-gallery">Gallery / Storage</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="filter-bar p-3">
+        <div class="container-fluid">
+            <div class="row align-items-center">
+                <div class="col-auto">
+                    <label class="form-label mb-0 me-2"><strong>Status:</strong></label>
+                    <select id="status-filter" class="form-select form-select-sm d-inline-block" style="width: auto;">
+                        <option value="pending" selected>Pending</option>
+                        <option value="approved">Approved</option>
+                        <option value="rejected">Rejected</option>
+                        <option value="all">All</option>
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <label class="form-label mb-0 me-2"><strong>Challenge:</strong></label>
+                    <select id="challenge-filter" class="form-select form-select-sm d-inline-block" style="width: auto;">
+                        <option value="">All Challenges</option>
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <button class="btn btn-sm btn-primary" onclick="loadReviews()">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
+                <div class="col-auto ms-auto">
+                    <span id="review-count" class="text-muted"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container-fluid p-4" id="reviews-panel">
+        <div id="reviews-container" class="row g-3">
+            <div class="col-12 text-center py-5">
+                <div class="spinner-border" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container-fluid p-4" id="gallery-panel" style="display:none;">
+        <div class="row mb-3">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-body">
+                        <h5>Storage Usage</h5>
+                        <div id="storage-stats" class="text-muted">Loading...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="row mb-3">
+            <div class="col-auto">
+                <label class="form-label mb-0 me-2"><strong>Show:</strong></label>
+                <select id="gallery-status-filter" class="form-select form-select-sm d-inline-block" style="width:auto;" onchange="loadGallery()">
+                    <option value="all">All</option>
+                    <option value="approved">Approved</option>
+                    <option value="rejected">Rejected</option>
+                    <option value="pending">Pending</option>
+                </select>
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-danger" onclick="deleteSelected()" id="delete-selected-btn" disabled>
+                    <i class="fas fa-trash"></i> Delete Selected Files
+                </button>
+            </div>
+            <div class="col-auto">
+                <label class="form-check-label">
+                    <input type="checkbox" class="form-check-input" id="select-all-gallery" onchange="toggleSelectAll()"> Select all
+                </label>
+            </div>
+        </div>
+        <div id="gallery-container" class="row g-2"></div>
+    </div>
+
+    <!-- Image Modal -->
+    <div class="modal fade" id="imageModal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="imageModalLabel">Screenshot</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body text-center">
+                    <img id="modal-image" class="screenshot-full" src="">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>var CSRF_NONCE = "{{ nonce }}";</script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/plugins/screenshot_challenges/assets/review.js"></script>
+</body>
+</html>
