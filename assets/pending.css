@@ -3,3 +3,9 @@
     border-color: #fd7e14 !important;
     color: #fff !important;
 }
+
+.challenge-rejected {
+    background-color: #dc3545 !important;
+    border-color: #dc3545 !important;
+    color: #fff !important;
+}

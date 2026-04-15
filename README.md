@@ -4,6 +4,20 @@ A CTFd plugin that adds a **screenshot** challenge type where students upload im
 
 Built as a pure plugin — **no modifications to CTFd core**.
 
+## Screenshots
+
+### Add a screenshot challenge
+![Add screenshot challenge](https://gist.github.com/user-attachments/assets/77aa3f84-d61c-484f-9b19-8836e5de18bf)
+
+### Approve or reject submissions
+![Approve or reject submissions](https://gist.github.com/user-attachments/assets/25ba1e25-bf65-40c9-8504-7c89320323de)
+
+### Gallery / storage management
+![Gallery](https://gist.github.com/user-attachments/assets/7f77a397-f9ae-418b-8ec3-6813f2bf1f10)
+
+### Student view — orange status for pending submissions
+![User view - orange pending status](https://gist.github.com/user-attachments/assets/53c12ccd-5a84-4436-ad71-33b8b06372cb)
+
 ## Why
 
 Standard CTFd challenges require students to submit a text flag. But in teaching and training environments, instructors often need students to demonstrate their work visually — a terminal output, a completed exercise, a tool configuration, or a lab result. This plugin lets students submit screenshots as proof of work, with a built-in instructor review workflow.

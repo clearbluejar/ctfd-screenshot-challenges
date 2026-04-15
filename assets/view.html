@@ -2,6 +2,7 @@
 
 {% block input %}
   <input id="challenge-id" class="challenge-id" type="hidden" value="{{ challenge.id }}">
+  <div id="screenshot-status-banner" x-init="window.__loadScreenshotStatus && window.__loadScreenshotStatus({{ challenge.id }})"></div>
   <div class="w-100">
     <input
         id="screenshot-file" class="form-control"

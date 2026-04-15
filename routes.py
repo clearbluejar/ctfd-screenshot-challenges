@@ -303,12 +303,30 @@ def serve_screenshot(filepath):
 @authed_only
 def my_pending():
     user = get_current_user()
-    pending = ScreenshotSubmission.query.filter_by(
-        user_id=user.id,
-        status="pending",
+    submissions = ScreenshotSubmission.query.filter(
+        ScreenshotSubmission.user_id == user.id,
+        ScreenshotSubmission.status.in_(["pending", "rejected"]),
     ).all()
-    challenge_ids = list(set(ss.challenge_id for ss in pending))
-    return jsonify({"data": challenge_ids})
+    pending_ids = list(set(ss.challenge_id for ss in submissions if ss.status == "pending"))
+    rejected_ids = list(set(ss.challenge_id for ss in submissions if ss.status == "rejected"))
+    return jsonify({"pending": pending_ids, "rejected": rejected_ids})
+
+
+@screenshot_bp.route("/plugins/screenshot_challenges/api/my-status/<int:challenge_id>")
+@authed_only
+def my_status(challenge_id):
+    user = get_current_user()
+    ss = ScreenshotSubmission.query.filter_by(
+        user_id=user.id,
+        challenge_id=challenge_id,
+    ).order_by(ScreenshotSubmission.date.desc()).first()
+    if not ss:
+        return jsonify({"status": None})
+    return jsonify({
+        "status": ss.status,
+        "review_comment": ss.review_comment,
+        "date": ss.date.isoformat() if ss.date else None,
+    })
 
 
 @screenshot_bp.route("/plugins/screenshot_challenges/api/storage")
