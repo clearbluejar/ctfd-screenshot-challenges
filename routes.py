@@ -63,6 +63,18 @@ def submit_screenshot():
         db.session.delete(pending)
         db.session.flush()
 
+    rejected_priors = ScreenshotSubmission.query.filter(
+        ScreenshotSubmission.challenge_id == challenge_id,
+        ScreenshotSubmission.user_id == user.id,
+        ScreenshotSubmission.status == "rejected",
+        ScreenshotSubmission.award_id.isnot(None),
+    ).all()
+    for prior in rejected_priors:
+        Awards.query.filter_by(id=prior.award_id).delete()
+        prior.award_id = None
+    if rejected_priors:
+        db.session.flush()
+
     # Validate file
     file = request.files.get("file")
     if not file or not file.filename:
@@ -276,6 +288,10 @@ def reject_review(review_id):
         comment = request.get_json().get("comment", "")
     else:
         comment = request.form.get("comment", "")
+
+    if ss.award_id:
+        Awards.query.filter_by(id=ss.award_id).delete()
+        ss.award_id = None
 
     ss.status = "rejected"
     ss.reviewer_id = admin.id
