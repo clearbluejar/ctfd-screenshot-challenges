@@ -10,6 +10,7 @@
         body { background-color: #f8f9fa; }
         .review-card { transition: opacity 0.3s; }
         .review-card.processed { opacity: 0.5; }
+
         .screenshot-thumb {
             max-width: 300px;
             max-height: 200px;
@@ -17,10 +18,48 @@
             border: 1px solid #dee2e6;
             border-radius: 4px;
         }
+
+        /* Modal zoom: magnifier overlay shown only inside the modal */
+        #imageModal .modal-body {
+            overflow: auto;
+            max-height: 90vh;
+            position: relative;
+        }
+        .modal-image-wrapper {
+            position: relative;
+            display: inline-block;
+            cursor: zoom-in;
+        }
+        .modal-image-wrapper .zoom-hint {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: rgba(0, 0, 0, 0.55);
+            color: #fff;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            opacity: 0;
+            transition: opacity 0.2s;
+            pointer-events: none;
+        }
+        .modal-image-wrapper:hover .zoom-hint {
+            opacity: 1;
+        }
         .screenshot-full {
             max-width: 100%;
-            max-height: 80vh;
+            max-height: 85vh;
+            display: block;
+            user-select: none;
         }
+        .modal-image-wrapper.zoomed {
+            cursor: zoom-out;
+        }
+        .modal-image-wrapper.zoomed .screenshot-full {
+            max-width: none;
+            max-height: none;
+        }
+
         .status-pending { color: #fd7e14; font-weight: bold; }
         .status-approved { color: #28a745; font-weight: bold; }
         .status-rejected { color: #dc3545; font-weight: bold; }
@@ -122,7 +161,10 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body text-center">
-                    <img id="modal-image" class="screenshot-full" src="">
+                    <span id="modal-image-wrapper" class="modal-image-wrapper">
+                        <img id="modal-image" class="screenshot-full" src="">
+                        <span class="zoom-hint"><i class="fas fa-search-plus"></i> Click to zoom</span>
+                    </span>
                 </div>
             </div>
         </div>

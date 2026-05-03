@@ -4,6 +4,9 @@ CTFd._internal.challenge.preRender = function() {};
 CTFd._internal.challenge.render = null;
 CTFd._internal.challenge.postRender = function() {};
 
+// Holds the currently selected/pasted blob to upload
+window.__pendingScreenshot = null;
+
 window.__loadScreenshotStatus = function(challengeId) {
   var banner = document.getElementById("screenshot-status-banner");
   if (!banner || !challengeId) return;
@@ -33,9 +36,82 @@ window.__loadScreenshotStatus = function(challengeId) {
   .catch(function() {});
 };
 
+function __setScreenshot(blob, name) {
+  window.__pendingScreenshot = { blob: blob, name: name || "screenshot.png" };
+
+  var preview = document.getElementById("screenshot-preview");
+  var wrapper = document.getElementById("screenshot-preview-wrapper");
+  var nameEl = document.getElementById("screenshot-preview-name");
+  var sizeEl = document.getElementById("screenshot-preview-size");
+
+  if (preview) {
+    preview.src = URL.createObjectURL(blob);
+    if (wrapper) wrapper.style.display = "";
+    if (nameEl) nameEl.textContent = name;
+    if (sizeEl) sizeEl.textContent = formatBytes(blob.size);
+  }
+}
+
+function formatBytes(bytes) {
+  if (bytes === 0) return "0 B";
+  var units = ["B", "KB", "MB"];
+  var i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return (bytes / Math.pow(1024, i)).toFixed(1) + " " + units[i];
+}
+
+window.__clearScreenshot = function() {
+  window.__pendingScreenshot = null;
+  var fileInput = document.getElementById("screenshot-file");
+  if (fileInput) fileInput.value = "";
+  var preview = document.getElementById("screenshot-preview");
+  var wrapper = document.getElementById("screenshot-preview-wrapper");
+  if (preview && preview.src) URL.revokeObjectURL(preview.src);
+  if (wrapper) wrapper.style.display = "none";
+};
+
+window.__handleFileSelect = function(event) {
+  var file = event.target.files && event.target.files[0];
+  if (file) {
+    __setScreenshot(file, file.name);
+  }
+};
+
+window.__initScreenshotPaste = function() {
+  // Avoid double-binding if the modal is reopened
+  if (window.__pasteHandlerAttached) return;
+  window.__pasteHandlerAttached = true;
+
+  document.addEventListener("paste", function(e) {
+    // Only handle paste when the screenshot challenge modal is open and visible
+    var pasteZone = document.getElementById("screenshot-paste-zone");
+    if (!pasteZone) return;
+    // Ignore paste targeted at editable text fields (e.g., comment textarea)
+    var target = e.target;
+    if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT" && target.type !== "file")) {
+      // Allow paste only if it's the paste zone itself or no items are images
+      if (target.id !== "screenshot-paste-zone") return;
+    }
+
+    var items = (e.clipboardData || e.originalEvent.clipboardData || {}).items;
+    if (!items) return;
+
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].type && items[i].type.indexOf("image") === 0) {
+        var blob = items[i].getAsFile();
+        if (blob) {
+          e.preventDefault();
+          var ext = (blob.type.split("/")[1] || "png").split("+")[0];
+          var name = "pasted-screenshot-" + Date.now() + "." + ext;
+          __setScreenshot(blob, name);
+          return;
+        }
+      }
+    }
+  });
+};
+
 window.__screenshotSubmit = function(challengeId) {
   challengeId = parseInt(challengeId);
-  var fileInput = document.getElementById("screenshot-file");
 
   if (!challengeId) {
     return Promise.resolve({
@@ -46,17 +122,31 @@ window.__screenshotSubmit = function(challengeId) {
     });
   }
 
-  if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+  // Prefer pasted/selected blob
+  var blob = null;
+  var name = "screenshot.png";
+  if (window.__pendingScreenshot) {
+    blob = window.__pendingScreenshot.blob;
+    name = window.__pendingScreenshot.name;
+  } else {
+    var fileInput = document.getElementById("screenshot-file");
+    if (fileInput && fileInput.files && fileInput.files.length > 0) {
+      blob = fileInput.files[0];
+      name = blob.name;
+    }
+  }
+
+  if (!blob) {
     return Promise.resolve({
       data: {
         status: "incorrect",
-        message: "Please select a screenshot file to upload."
+        message: "Please paste or select a screenshot to upload."
       }
     });
   }
 
   var formData = new FormData();
-  formData.append("file", fileInput.files[0]);
+  formData.append("file", blob, name);
   formData.append("challenge_id", challengeId);
   formData.append("nonce", CTFd.config.csrfNonce);
 
@@ -70,7 +160,7 @@ window.__screenshotSubmit = function(challengeId) {
   }).then(function(response) {
     return response.json();
   }).then(function(data) {
-    fileInput.value = "";
+    window.__clearScreenshot();
     return data;
   });
 };

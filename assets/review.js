@@ -116,7 +116,7 @@ function renderReviews(submissions, status) {
             html += '<span class="badge bg-' + getBadgeColor(ss.status) + '">' + ss.status.toUpperCase() + '</span>';
             html += '</div>';
 
-            // Thumbnail
+            // Thumbnail (click to open in modal)
             html += '<div class="text-center my-2">';
             html += '<img src="' + imgUrl + '" class="screenshot-thumb" ';
             html += 'onclick="showFullImage(\'' + imgUrl + '\', \'' + escapeHtml(ss.challenge_name) + ' - ' + escapeHtml(ss.user_name) + '\')" ';
@@ -233,8 +233,37 @@ function batchApprove(ids) {
 }
 
 function showFullImage(url, title) {
-    document.getElementById("modal-image").src = url;
+    var img = document.getElementById("modal-image");
+    var wrapper = document.getElementById("modal-image-wrapper");
+    img.src = url;
+    img.style.width = "";
+    img.style.height = "";
+    if (wrapper) wrapper.classList.remove("zoomed");
     document.getElementById("imageModalLabel").textContent = title;
+
+    if (wrapper) {
+        wrapper.onclick = function() {
+            if (wrapper.classList.contains("zoomed")) {
+                wrapper.classList.remove("zoomed");
+                img.style.width = "";
+                img.style.height = "";
+            } else {
+                wrapper.classList.add("zoomed");
+                var naturalWidth = img.naturalWidth;
+                var displayWidth = img.clientWidth;
+                if (naturalWidth > displayWidth) {
+                    // Zoom to natural (1:1) size
+                    img.style.width = naturalWidth + "px";
+                    img.style.height = "auto";
+                } else {
+                    // Image already fits; zoom in by 2x
+                    img.style.width = (displayWidth * 2) + "px";
+                    img.style.height = "auto";
+                }
+            }
+        };
+    }
+
     var modal = new bootstrap.Modal(document.getElementById("imageModal"));
     modal.show();
 }
