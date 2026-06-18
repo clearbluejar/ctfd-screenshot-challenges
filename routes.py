@@ -40,27 +40,25 @@ def submit_screenshot():
     if solve_query.first():
         return jsonify({"data": {"status": "already_solved", "message": "You have already solved this challenge."}})
 
-    # Replace existing pending submission if one exists
-    pending = ScreenshotSubmission.query.filter_by(
+    # Replace existing pending submissions if any exist
+    pending_list = ScreenshotSubmission.query.filter_by(
         challenge_id=challenge_id,
         user_id=user.id,
         status="pending",
-    ).first()
-    if pending:
-        # Delete old uploaded file
-        if pending.file_location:
-            try:
-                uploader = get_uploader()
-                uploader.delete(filename=pending.file_location)
-            except Exception:
-                pass
-        # Delete old partial credit award
-        if pending.award_id:
-            Awards.query.filter_by(id=pending.award_id).delete()
-        # Delete old submission record
-        if pending.submission_id:
-            Submissions.query.filter_by(id=pending.submission_id).delete()
-        db.session.delete(pending)
+    ).all()
+    if pending_list:
+        uploader = get_uploader()
+        for pending in pending_list:
+            if pending.file_location:
+                try:
+                    uploader.delete(filename=pending.file_location)
+                except Exception:
+                    pass
+            if pending.award_id:
+                Awards.query.filter_by(id=pending.award_id).delete()
+            if pending.submission_id:
+                Submissions.query.filter_by(id=pending.submission_id).delete()
+            db.session.delete(pending)
         db.session.flush()
 
     rejected_priors = ScreenshotSubmission.query.filter(
@@ -75,60 +73,47 @@ def submit_screenshot():
     if rejected_priors:
         db.session.flush()
 
-    # Validate file
-    file = request.files.get("file")
-    if not file or not file.filename:
+    files = [f for f in request.files.getlist("file") if f and f.filename]
+    if not files:
         return jsonify({"data": {"status": "incorrect", "message": "No file uploaded."}}), 400
+    if len(files) > 4:
+        return jsonify({"data": {"status": "incorrect", "message": "You may upload up to 4 images."}}), 400
 
-    # Check extension
     allowed = [ext.strip().lower() for ext in challenge.allowed_extensions.split(",")]
-    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-    if ext not in allowed:
-        return jsonify({
-            "data": {
-                "status": "incorrect",
-                "message": f"File type '.{ext}' not allowed. Allowed: {', '.join(allowed)}",
-            }
-        }), 400
-
-    # Check file size
-    file.seek(0, os.SEEK_END)
-    size = file.tell()
-    file.seek(0)
-    if size > challenge.max_file_size:
-        max_mb = challenge.max_file_size / (1024 * 1024)
-        return jsonify({
-            "data": {
-                "status": "incorrect",
-                "message": f"File too large. Maximum size: {max_mb:.1f} MB",
-            }
-        }), 400
-
-    # Upload file using CTFd's uploader
     uploader = get_uploader()
-    # Create a unique directory for the upload
     import hashlib
     import time
     hash_prefix = hashlib.md5(
         f"{user.id}-{challenge_id}-{time.time()}".encode()
     ).hexdigest()[:8]
-    safe_filename = f"screenshot.{ext}"
-    location = uploader.upload(file_obj=file, filename=safe_filename, path=hash_prefix)
 
-    # Create a Submissions record (type "partial")
-    submission = Submissions(
-        challenge_id=challenge_id,
-        user_id=user.id,
-        team_id=team.id if team else None,
-        ip=get_ip(req=request),
-        provided=f"[screenshot:{location}]",
-        type="partial",
-    )
-    db.session.add(submission)
-    db.session.flush()
+    uploads = []
+    for index, file in enumerate(files):
+        ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+        if ext not in allowed:
+            return jsonify({
+                "data": {
+                    "status": "incorrect",
+                    "message": f"File type '.{ext}' not allowed. Allowed: {', '.join(allowed)}",
+                }
+            }), 400
 
-    # Create partial credit award if submission_points > 0
-    award = None
+        file.seek(0, os.SEEK_END)
+        size = file.tell()
+        file.seek(0)
+        if size > challenge.max_file_size:
+            max_mb = challenge.max_file_size / (1024 * 1024)
+            return jsonify({
+                "data": {
+                    "status": "incorrect",
+                    "message": f"File too large. Maximum size: {max_mb:.1f} MB",
+                }
+            }), 400
+
+        safe_filename = f"screenshot-{index + 1}.{ext}"
+        location = uploader.upload(file_obj=file, filename=safe_filename, path=hash_prefix)
+        uploads.append((file, location, ext))
+
     award_id = None
     if challenge.submission_points and challenge.submission_points > 0:
         award = Awards(
@@ -143,21 +128,33 @@ def submit_screenshot():
         db.session.flush()
         award_id = award.id
 
-    # Create ScreenshotSubmission record
-    ss = ScreenshotSubmission(
-        submission_id=submission.id,
-        challenge_id=challenge_id,
-        user_id=user.id,
-        team_id=team.id if team else None,
-        file_location=location,
-        status="pending",
-        award_id=award_id,
-    )
-    db.session.add(ss)
+    for index, (_, location, _) in enumerate(uploads):
+        submission = Submissions(
+            challenge_id=challenge_id,
+            user_id=user.id,
+            team_id=team.id if team else None,
+            ip=get_ip(req=request),
+            provided=f"[screenshot:{location}]",
+            type="partial",
+        )
+        db.session.add(submission)
+        db.session.flush()
+
+        ss = ScreenshotSubmission(
+            submission_id=submission.id,
+            challenge_id=challenge_id,
+            user_id=user.id,
+            team_id=team.id if team else None,
+            file_location=location,
+            status="pending",
+            award_id=award_id if index == 0 else None,
+        )
+        db.session.add(ss)
+
     db.session.commit()
 
-    msg = "Screenshot submitted!"
-    if challenge.submission_points and challenge.submission_points > 0:
+    msg = f"{len(uploads)} screenshot(s) submitted!"
+    if award_id:
         msg += f" Partial credit ({challenge.submission_points} pts) awarded."
     msg += " Awaiting instructor review."
 

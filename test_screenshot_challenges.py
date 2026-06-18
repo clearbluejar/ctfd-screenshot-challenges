@@ -71,6 +71,33 @@ def _submit_screenshot(client, challenge_id, filename="proof.png"):
     )
 
 
+def _submit_screenshots(client, challenge_id, filenames):
+    with client.session_transaction() as sess:
+        nonce = sess.get("nonce")
+    data = [
+        ("challenge_id", str(challenge_id)),
+        ("nonce", nonce),
+    ]
+    for filename in filenames:
+        data.append(("file", (io.BytesIO(b"\x89PNG\r\n\x1a\nfake"), filename)))
+    return client.post(
+        "/plugins/screenshot_challenges/submit",
+        data=data,
+        content_type="multipart/form-data",
+    )
+
+
+def _screenshot_submission_count(app, challenge_id, user_name="user"):
+    from CTFd.models import Users
+    from CTFd.plugins.screenshot_challenges import ScreenshotSubmission
+    with app.app_context():
+        u = Users.query.filter_by(name=user_name).first()
+        return ScreenshotSubmission.query.filter_by(
+            user_id=u.id,
+            challenge_id=challenge_id,
+        ).count()
+
+
 def _latest_review_id(app, challenge_id, user_name="user"):
     from CTFd.models import Users
     from CTFd.plugins.screenshot_challenges import ScreenshotSubmission
@@ -200,3 +227,68 @@ def test_reject_with_no_partial_points_is_safe(app):
     )
     assert r.status_code == 200
     assert _user_score(app) == 0
+
+
+def test_upload_four_screenshots_creates_four_submissions_and_one_award(app):
+    challenge_id = _make_challenge(app)
+    register_user(app)
+    user = login_as_user(app)
+
+    r = _submit_screenshots(
+        user,
+        challenge_id,
+        ["proof1.png", "proof2.png", "proof3.png", "proof4.png"],
+    )
+    assert r.status_code == 200, r.get_data(as_text=True)
+    data = r.get_json()["data"]
+    assert data["status"] == "correct"
+    assert "4 screenshot(s) submitted" in data["message"]
+    assert _screenshot_submission_count(app, challenge_id) == 4
+    assert _award_count(app) == 1
+
+
+def test_upload_more_than_four_screenshots_is_rejected(app):
+    challenge_id = _make_challenge(app)
+    register_user(app)
+    user = login_as_user(app)
+
+    r = _submit_screenshots(
+        user,
+        challenge_id,
+        [
+            "proof1.png",
+            "proof2.png",
+            "proof3.png",
+            "proof4.png",
+            "proof5.png",
+        ],
+    )
+    assert r.status_code == 400, r.get_data(as_text=True)
+    data = r.get_json()["data"]
+    assert data["status"] == "incorrect"
+    assert "You may upload up to 4 images" in data["message"]
+    assert _screenshot_submission_count(app, challenge_id) == 0
+
+
+def test_upload_oversized_screenshot_is_rejected(app):
+    challenge_id = _make_challenge(app)
+    register_user(app)
+    user = login_as_user(app)
+
+    with user.session_transaction() as sess:
+        nonce = sess.get("nonce")
+    oversized = io.BytesIO(b"\x00" * (10485760 + 1))
+    response = user.post(
+        "/plugins/screenshot_challenges/submit",
+        data={
+            "challenge_id": str(challenge_id),
+            "nonce": nonce,
+            "file": (oversized, "big.png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400, response.get_data(as_text=True)
+    data = response.get_json()["data"]
+    assert data["status"] == "incorrect"
+    assert "Maximum size" in data["message"]
+    assert _screenshot_submission_count(app, challenge_id) == 0
