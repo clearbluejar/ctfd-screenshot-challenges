@@ -184,6 +184,13 @@
                     </span>
                 </div>
                 <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" id="modal-prev-btn" onclick="showPreviousImage()" disabled>
+                        <i class="fas fa-chevron-left"></i> Previous
+                    </button>
+                    <span id="modal-image-counter" class="text-muted small mx-2"></span>
+                    <button type="button" class="btn btn-outline-secondary" id="modal-next-btn" onclick="showNextImage()" disabled>
+                        Next <i class="fas fa-chevron-right"></i>
+                    </button>
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                     <button type="button" class="btn btn-primary" id="download-modal-btn" onclick="downloadCurrentImage()">
                         <i class="fas fa-download"></i> Download Original

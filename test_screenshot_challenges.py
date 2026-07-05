@@ -118,6 +118,15 @@ def _latest_review_id(app, challenge_id, user_name="user"):
         return ss.id
 
 
+def _reviews_json(client, grouped=False):
+    url = "/plugins/screenshot_challenges/api/reviews?status=pending"
+    if grouped:
+        url += "&grouped=1"
+    response = client.get(url)
+    assert response.status_code == 200, response.get_data(as_text=True)
+    return response.get_json()
+
+
 @pytest.fixture
 def app():
     fake_uploader = MagicMock()
@@ -247,7 +256,7 @@ def test_upload_four_screenshots_creates_four_submissions_and_one_award(app):
     )
     assert r.status_code == 200, r.get_data(as_text=True)
     data = r.get_json()["data"]
-    assert data["status"] == "correct"
+    assert data["status"] == "paused"
     assert "4 screenshot(s) submitted" in data["message"]
     assert _screenshot_submission_count(app, challenge_id) == 4
     assert _award_count(app) == 1
@@ -256,6 +265,30 @@ def test_upload_four_screenshots_creates_four_submissions_and_one_award(app):
     with app.app_context():
         recorded = Submissions.query.filter_by(id=submissions[0].submission_id).first()
         assert recorded.provided.startswith("[screenshots:")
+
+
+def test_review_api_groups_multi_image_attempt_for_admin_reviews(app):
+    challenge_id = _make_challenge(app)
+    register_user(app)
+    user = login_as_user(app)
+    admin = login_as_user(app, name="admin", password="password")
+
+    r = _submit_screenshots(
+        user,
+        challenge_id,
+        ["proof1.png", "proof2.png", "proof3.png", "proof4.png"],
+    )
+    assert r.status_code == 200, r.get_data(as_text=True)
+
+    flat = _reviews_json(admin, grouped=False)
+    assert len(flat["data"]) == 4
+
+    grouped = _reviews_json(admin, grouped=True)
+    assert len(grouped["data"]) == 1
+    review = grouped["data"][0]
+    assert review["image_count"] == 4
+    assert len(review["files"]) == 4
+    assert len({file["id"] for file in review["files"]}) == 4
 
 
 def test_upload_more_than_four_screenshots_is_rejected(app):
@@ -347,3 +380,9 @@ def test_rejecting_one_screenshot_rejects_whole_multi_image_attempt(app):
     assert _award_count(app) == 0
     submissions = _screenshot_submissions(app, challenge_id)
     assert {ss.status for ss in submissions} == {"rejected"}
+
+    status = user.get(f"/plugins/screenshot_challenges/api/my-status/{challenge_id}")
+    assert status.status_code == 200, status.get_data(as_text=True)
+    data = status.get_json()
+    assert data["status"] == "rejected"
+    assert data["review_comment"] == "missing context"

@@ -37,14 +37,20 @@ window.__loadScreenshotStatus = function(challengeId) {
       banner.innerHTML = '<div class="alert alert-warning text-center mb-2 py-2">' +
         '<i class="fas fa-clock"></i> Your screenshot is awaiting instructor review.</div>';
     } else if (data.status === "rejected") {
-      var msg = '<div class="alert alert-danger text-center mb-2 py-2">' +
-        '<i class="fas fa-times-circle"></i> <strong>Submission rejected.</strong>';
+      var feedback = data.review_comment ?
+        escapeHtml(data.review_comment) :
+        '<span class="text-muted">No additional feedback was provided.</span>';
+      var msg = '<div class="alert alert-danger mb-3 py-3 text-start text-left" role="alert">' +
+        '<div class="fw-bold font-weight-bold mb-2"><i class="fas fa-times-circle"></i> Your screenshot submission was rejected.</div>' +
+        '<div class="mb-2">Review the instructor feedback below, then upload a corrected screenshot.</div>' +
+        '<div class="border rounded bg-light text-dark p-2">' +
+        '<div class="small text-uppercase fw-bold font-weight-bold text-danger mb-1">Instructor feedback</div>' +
+        '<div>' + feedback + '</div>' +
+        '</div>';
       if (data.review_comment) {
-        var div = document.createElement("div");
-        div.textContent = data.review_comment;
-        msg += '<br><small>"' + div.innerHTML + '"</small>';
+        msg += '<div class="small mt-2 text-danger">This is why the submission did not pass review.</div>';
       }
-      msg += '<br><small>Please upload a new screenshot below.</small></div>';
+      msg += '</div>';
       banner.innerHTML = msg;
     }
   })

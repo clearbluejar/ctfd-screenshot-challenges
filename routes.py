@@ -36,6 +36,43 @@ def _review_group(ss):
     ).all()
 
 
+def _serialize_review(ss):
+    return {
+        "id": ss.id,
+        "submission_id": ss.submission_id,
+        "challenge_id": ss.challenge_id,
+        "challenge_name": ss.challenge.name if ss.challenge else "Unknown",
+        "challenge_category": ss.challenge.category if ss.challenge else "",
+        "challenge_description": ss.challenge.description if ss.challenge else "",
+        "user_id": ss.user_id,
+        "user_name": ss.user.name if ss.user else "Unknown",
+        "team_id": ss.team_id,
+        "team_name": ss.team.name if ss.team else None,
+        "file_location": ss.file_location,
+        "status": ss.status,
+        "reviewer": ss.reviewer.name if ss.reviewer else None,
+        "review_date": ss.review_date.isoformat() if ss.review_date else None,
+        "review_comment": ss.review_comment,
+        "date": ss.date.isoformat() if ss.date else None,
+    }
+
+
+def _serialize_review_group(group):
+    first = group[0]
+    data = _serialize_review(first)
+    data["files"] = [
+        {
+            "id": ss.id,
+            "file_location": ss.file_location,
+            "status": ss.status,
+        }
+        for ss in group
+        if ss.file_location
+    ]
+    data["image_count"] = len(data["files"])
+    return data
+
+
 @screenshot_bp.route("/plugins/screenshot_challenges/submit", methods=["POST"])
 @authed_only
 def submit_screenshot():
@@ -185,7 +222,7 @@ def submit_screenshot():
         msg += f" Partial credit ({challenge.submission_points} pts) awarded."
     msg += " Awaiting instructor review."
 
-    return jsonify({"data": {"status": "correct", "message": msg}})
+    return jsonify({"data": {"status": "paused", "message": msg}})
 
 
 @screenshot_bp.route("/plugins/screenshot_reviews")
@@ -201,6 +238,7 @@ def review_page():
 def list_reviews():
     status = request.args.get("status", "pending")
     challenge_id = request.args.get("challenge_id", type=int)
+    grouped = request.args.get("grouped") in ("1", "true", "yes")
 
     query = ScreenshotSubmission.query
     if status != "all":
@@ -211,26 +249,18 @@ def list_reviews():
     query = query.order_by(ScreenshotSubmission.date.desc())
     submissions = query.all()
 
-    data = []
-    for ss in submissions:
-        data.append({
-            "id": ss.id,
-            "submission_id": ss.submission_id,
-            "challenge_id": ss.challenge_id,
-            "challenge_name": ss.challenge.name if ss.challenge else "Unknown",
-            "challenge_category": ss.challenge.category if ss.challenge else "",
-            "challenge_description": ss.challenge.description if ss.challenge else "",
-            "user_id": ss.user_id,
-            "user_name": ss.user.name if ss.user else "Unknown",
-            "team_id": ss.team_id,
-            "team_name": ss.team.name if ss.team else None,
-            "file_location": ss.file_location,
-            "status": ss.status,
-            "reviewer": ss.reviewer.name if ss.reviewer else None,
-            "review_date": ss.review_date.isoformat() if ss.review_date else None,
-            "review_comment": ss.review_comment,
-            "date": ss.date.isoformat() if ss.date else None,
-        })
+    if grouped:
+        groups = {}
+        group_order = []
+        for ss in submissions:
+            key = ss.submission_id or ss.id
+            if key not in groups:
+                groups[key] = []
+                group_order.append(key)
+            groups[key].append(ss)
+        data = [_serialize_review_group(groups[key]) for key in group_order]
+    else:
+        data = [_serialize_review(ss) for ss in submissions]
 
     # Also get challenge list for filter dropdown
     challenges = ScreenshotChallenge.query.all()

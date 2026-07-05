@@ -24,13 +24,18 @@
         buttons.forEach(function(btn) {
             var chalId = parseInt(btn.getAttribute("value"), 10);
             if (btn.classList.contains("challenge-solved")) return;
+            var challengeName = btn.textContent.trim() || "Challenge";
 
             if (pendingIds.indexOf(chalId) !== -1) {
                 btn.classList.add("challenge-pending");
                 btn.classList.remove("challenge-rejected");
+                btn.setAttribute("title", "Screenshot submitted - awaiting instructor review.");
+                btn.setAttribute("aria-label", challengeName + ": screenshot submitted - awaiting instructor review.");
             } else if (rejectedIds.indexOf(chalId) !== -1) {
                 btn.classList.add("challenge-rejected");
                 btn.classList.remove("challenge-pending");
+                btn.setAttribute("title", "Screenshot rejected - open challenge for instructor feedback and resubmit.");
+                btn.setAttribute("aria-label", challengeName + ": screenshot rejected - open challenge for instructor feedback and resubmit.");
             }
         });
     }
