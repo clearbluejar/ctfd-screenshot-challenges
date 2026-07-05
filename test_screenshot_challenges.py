@@ -8,8 +8,9 @@ import io
 from unittest.mock import MagicMock, patch
 
 import pytest
+from werkzeug.datastructures import MultiDict
 
-from CTFd.models import Awards, Solves, db
+from CTFd.models import Awards, Solves, Submissions, db
 from tests.helpers import (
     create_ctfd,
     destroy_ctfd,
@@ -74,12 +75,12 @@ def _submit_screenshot(client, challenge_id, filename="proof.png"):
 def _submit_screenshots(client, challenge_id, filenames):
     with client.session_transaction() as sess:
         nonce = sess.get("nonce")
-    data = [
+    data = MultiDict([
         ("challenge_id", str(challenge_id)),
         ("nonce", nonce),
-    ]
+    ])
     for filename in filenames:
-        data.append(("file", (io.BytesIO(b"\x89PNG\r\n\x1a\nfake"), filename)))
+        data.add("file", (io.BytesIO(b"\x89PNG\r\n\x1a\nfake"), filename))
     return client.post(
         "/plugins/screenshot_challenges/submit",
         data=data,
@@ -87,7 +88,7 @@ def _submit_screenshots(client, challenge_id, filenames):
     )
 
 
-def _screenshot_submission_count(app, challenge_id, user_name="user"):
+def _screenshot_submissions(app, challenge_id, user_name="user"):
     from CTFd.models import Users
     from CTFd.plugins.screenshot_challenges import ScreenshotSubmission
     with app.app_context():
@@ -95,7 +96,12 @@ def _screenshot_submission_count(app, challenge_id, user_name="user"):
         return ScreenshotSubmission.query.filter_by(
             user_id=u.id,
             challenge_id=challenge_id,
-        ).count()
+        ).order_by(ScreenshotSubmission.id.asc()).all()
+
+
+def _screenshot_submission_count(app, challenge_id, user_name="user"):
+    with app.app_context():
+        return len(_screenshot_submissions(app, challenge_id, user_name))
 
 
 def _latest_review_id(app, challenge_id, user_name="user"):
@@ -245,6 +251,11 @@ def test_upload_four_screenshots_creates_four_submissions_and_one_award(app):
     assert "4 screenshot(s) submitted" in data["message"]
     assert _screenshot_submission_count(app, challenge_id) == 4
     assert _award_count(app) == 1
+    submissions = _screenshot_submissions(app, challenge_id)
+    assert len({ss.submission_id for ss in submissions}) == 1
+    with app.app_context():
+        recorded = Submissions.query.filter_by(id=submissions[0].submission_id).first()
+        assert recorded.provided.startswith("[screenshots:")
 
 
 def test_upload_more_than_four_screenshots_is_rejected(app):
@@ -292,3 +303,47 @@ def test_upload_oversized_screenshot_is_rejected(app):
     assert data["status"] == "incorrect"
     assert "Maximum size" in data["message"]
     assert _screenshot_submission_count(app, challenge_id) == 0
+
+
+def test_approving_one_screenshot_approves_whole_multi_image_attempt(app):
+    challenge_id = _make_challenge(app)
+    register_user(app)
+    user = login_as_user(app)
+    admin = login_as_user(app, name="admin", password="password")
+
+    r = _submit_screenshots(user, challenge_id, ["proof1.png", "proof2.png"])
+    assert r.status_code == 200, r.get_data(as_text=True)
+    review_id = _latest_review_id(app, challenge_id)
+
+    r = admin.post(
+        f"/plugins/screenshot_challenges/api/reviews/{review_id}/approve",
+        json={"comment": "good"},
+    )
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert _user_score(app) == VALUE
+    assert _award_count(app) == 0
+    submissions = _screenshot_submissions(app, challenge_id)
+    assert {ss.status for ss in submissions} == {"approved"}
+    with app.app_context():
+        assert Solves.query.count() == 1
+
+
+def test_rejecting_one_screenshot_rejects_whole_multi_image_attempt(app):
+    challenge_id = _make_challenge(app)
+    register_user(app)
+    user = login_as_user(app)
+    admin = login_as_user(app, name="admin", password="password")
+
+    r = _submit_screenshots(user, challenge_id, ["proof1.png", "proof2.png"])
+    assert r.status_code == 200, r.get_data(as_text=True)
+    review_id = _latest_review_id(app, challenge_id)
+
+    r = admin.post(
+        f"/plugins/screenshot_challenges/api/reviews/{review_id}/reject",
+        json={"comment": "missing context"},
+    )
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert _user_score(app) == 0
+    assert _award_count(app) == 0
+    submissions = _screenshot_submissions(app, challenge_id)
+    assert {ss.status for ss in submissions} == {"rejected"}

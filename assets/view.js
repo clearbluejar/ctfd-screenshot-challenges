@@ -79,13 +79,19 @@ function __updateScreenshotPreview() {
     row.innerHTML =
       '<div class="text-truncate" style="min-width:0;">' +
       '<div class="small fw-bold" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
-      item.name + '</div>' +
+      escapeHtml(item.name) + '</div>' +
       '<div class="small text-muted">' + formatBytes(item.size) + '</div>' +
       '</div>' +
       '<button type="button" class="btn btn-sm btn-outline-danger" onclick="window.__removeScreenshot(' + index + ')">' +
       '<i class="fas fa-times"></i></button>';
     list.appendChild(row);
   });
+}
+
+function escapeHtml(text) {
+  var div = document.createElement("div");
+  div.textContent = text || "";
+  return div.innerHTML;
 }
 
 function formatBytes(bytes) {

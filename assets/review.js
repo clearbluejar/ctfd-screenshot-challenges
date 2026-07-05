@@ -74,8 +74,15 @@ function renderReviews(submissions, status) {
     groupOrder.forEach(function(key) {
         var group = groups[key];
         var pendingIds = [];
+        var pendingKeys = {};
         group.submissions.forEach(function(ss) {
-            if (ss.status === "pending") pendingIds.push(ss.id);
+            if (ss.status === "pending") {
+                var pendingKey = ss.submission_id || ss.id;
+                if (!pendingKeys[pendingKey]) {
+                    pendingIds.push(ss.id);
+                    pendingKeys[pendingKey] = true;
+                }
+            }
         });
 
         // Challenge group header
