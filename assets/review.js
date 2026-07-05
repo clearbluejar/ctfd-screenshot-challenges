@@ -4,6 +4,8 @@ var currentDownloadFilename = null;
 var imageGroups = {};
 var currentImageGroupKey = null;
 var currentImageIndex = 0;
+var llmConfig = { enabled: false };
+var llmConfigLoaded = false;
 
 function loadReviews() {
     var status = document.getElementById("status-filter").value;
@@ -177,6 +179,12 @@ function renderReviews(submissions, status) {
                 html += '<p class="small mb-1"><strong>Comment:</strong> ' + escapeHtml(ss.review_comment) + '</p>';
             }
 
+            html += renderLlmResult(ss);
+            if (llmConfig.enabled) {
+                html += '<button class="btn btn-outline-primary btn-sm w-100 mb-2" id="llm-score-btn-' + ss.id + '" onclick="scoreWithLlm(' + ss.id + ')">';
+                html += '<i class="fas fa-wand-magic-sparkles"></i> Score with LLM</button>';
+            }
+
             // Actions for pending
             if (ss.status === "pending") {
                 html += '<hr class="my-2">';
@@ -267,6 +275,69 @@ function reopenReview(id) {
         }
     })
     .catch(function(err) { alert("Error: " + err.message); });
+}
+
+function renderLlmResult(ss) {
+    if (ss.llm_score === null && ss.llm_score === undefined && !ss.llm_error) {
+        return "";
+    }
+
+    var html = '<div class="border rounded p-2 mb-2 bg-light" id="llm-result-' + ss.id + '">';
+    html += '<div class="d-flex justify-content-between align-items-center mb-1">';
+    html += '<strong><i class="fas fa-wand-magic-sparkles"></i> LLM Judge</strong>';
+    if (ss.llm_score !== null && ss.llm_score !== undefined) {
+        html += '<span class="badge bg-' + getLlmScoreBadgeColor(ss.llm_score) + '">' + ss.llm_score + '/100</span>';
+    }
+    html += '</div>';
+    if (ss.llm_feedback) {
+        html += '<div class="small">' + escapeHtml(ss.llm_feedback) + '</div>';
+    }
+    if (ss.llm_error) {
+        html += '<div class="small text-danger">' + escapeHtml(ss.llm_error) + '</div>';
+    }
+    if (ss.llm_model || ss.llm_review_date) {
+        html += '<div class="small text-muted mt-1">';
+        if (ss.llm_model) html += escapeHtml(ss.llm_model);
+        if (ss.llm_review_date) html += (ss.llm_model ? ' - ' : '') + formatDate(ss.llm_review_date);
+        html += '</div>';
+    }
+    html += '</div>';
+    return html;
+}
+
+function getLlmScoreBadgeColor(score) {
+    if (score >= 80) return "success";
+    if (score >= 50) return "warning";
+    return "danger";
+}
+
+function scoreWithLlm(id) {
+    var btn = document.getElementById("llm-score-btn-" + id);
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Scoring...';
+    }
+
+    fetch("/plugins/screenshot_challenges/api/reviews/" + id + "/llm-score", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "CSRF-Token": CSRF_NONCE },
+        body: JSON.stringify({})
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(result) {
+        if (!result.success) {
+            alert("LLM scoring failed: " + result.message);
+        }
+        loadReviews();
+    })
+    .catch(function(err) {
+        alert("LLM scoring failed: " + err.message);
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-wand-magic-sparkles"></i> Score with LLM';
+        }
+    });
 }
 
 function batchApprove(ids) {
@@ -513,13 +584,146 @@ function bindImagePreviewClicks(root) {
 function showTab(tab) {
     document.getElementById("reviews-panel").style.display = tab === "reviews" ? "" : "none";
     document.getElementById("gallery-panel").style.display = tab === "gallery" ? "" : "none";
+    document.getElementById("llm-panel").style.display = tab === "llm" ? "" : "none";
     document.getElementById("tab-reviews").classList.toggle("active", tab === "reviews");
     document.getElementById("tab-gallery").classList.toggle("active", tab === "gallery");
+    document.getElementById("tab-llm").classList.toggle("active", tab === "llm");
     document.querySelector(".filter-bar").style.display = tab === "reviews" ? "" : "none";
     if (tab === "gallery") {
         loadStorageStats();
         loadGallery();
+    } else if (tab === "llm") {
+        loadLlmConfig();
     }
+}
+
+// --- LLM judge settings ---
+function loadLlmConfig() {
+    return fetch("/plugins/screenshot_challenges/api/llm-config", { credentials: "same-origin" })
+        .then(function(r) { return r.json(); })
+        .then(function(config) {
+            llmConfig = config;
+            llmConfigLoaded = true;
+            applyLlmConfigToForm(config);
+        })
+        .catch(function(err) {
+            setLlmConfigStatus("Failed to load LLM config: " + err.message, true);
+        });
+}
+
+function applyLlmConfigToForm(config) {
+    var enabled = document.getElementById("llm-enabled");
+    var baseUrl = document.getElementById("llm-base-url");
+    var apiKey = document.getElementById("llm-api-key");
+    var clearApiKey = document.getElementById("llm-clear-api-key");
+    var prompt = document.getElementById("llm-prompt");
+    var apiKeyState = document.getElementById("llm-api-key-state");
+    var pill = document.getElementById("llm-config-pill");
+
+    if (enabled) enabled.checked = !!config.enabled;
+    if (baseUrl) baseUrl.value = config.base_url || "";
+    if (apiKey) apiKey.value = "";
+    if (clearApiKey) clearApiKey.checked = false;
+    if (prompt) prompt.value = config.prompt || "";
+    populateLlmModelSelect([], config.model || "");
+
+    if (apiKeyState) {
+        apiKeyState.textContent = config.has_api_key ? "An API key is saved. Enter a new value only to replace it." : "No API key is saved.";
+    }
+    if (pill) {
+        pill.textContent = config.enabled ? "Enabled" : "Disabled";
+        pill.className = "badge bg-" + (config.enabled ? "success" : "secondary");
+    }
+    setLlmConfigStatus("");
+}
+
+function collectLlmConfigForm() {
+    return {
+        enabled: document.getElementById("llm-enabled").checked,
+        base_url: document.getElementById("llm-base-url").value,
+        api_key: document.getElementById("llm-api-key").value,
+        clear_api_key: document.getElementById("llm-clear-api-key").checked,
+        model: document.getElementById("llm-model").value,
+        prompt: document.getElementById("llm-prompt").value
+    };
+}
+
+function saveLlmConfig() {
+    setLlmConfigStatus("Saving...");
+    fetch("/plugins/screenshot_challenges/api/llm-config", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "CSRF-Token": CSRF_NONCE },
+        body: JSON.stringify(collectLlmConfigForm())
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(result) {
+        if (!result.success) {
+            setLlmConfigStatus(result.message || "Failed to save settings.", true);
+            return;
+        }
+        llmConfig = result.config;
+        applyLlmConfigToForm(result.config);
+        setLlmConfigStatus("Settings saved.");
+        loadReviews();
+    })
+    .catch(function(err) {
+        setLlmConfigStatus("Failed to save settings: " + err.message, true);
+    });
+}
+
+function refreshLlmModels() {
+    setLlmConfigStatus("Loading models...");
+    fetch("/plugins/screenshot_challenges/api/llm-models", { credentials: "same-origin" })
+        .then(function(r) { return r.json(); })
+        .then(function(result) {
+            if (!result.success) {
+                setLlmConfigStatus(result.message || "Failed to load models.", true);
+                return;
+            }
+            populateLlmModelSelect(result.models || [], document.getElementById("llm-model").value || llmConfig.model || "");
+            setLlmConfigStatus("Loaded " + (result.models || []).length + " model(s).");
+        })
+        .catch(function(err) {
+            setLlmConfigStatus("Failed to load models: " + err.message, true);
+        });
+}
+
+function populateLlmModelSelect(models, selectedModel) {
+    var select = document.getElementById("llm-model");
+    if (!select) return;
+    var seen = {};
+    select.innerHTML = "";
+
+    function addOption(id, label) {
+        var key = id || "__empty";
+        if (seen[key]) return;
+        var opt = document.createElement("option");
+        opt.value = id || "";
+        opt.textContent = label || id || "Save settings, then refresh models";
+        select.appendChild(opt);
+        seen[key] = true;
+    }
+
+    addOption(selectedModel, selectedModel);
+    models.forEach(function(model) {
+        var label = model.id;
+        if (model.supports_images === true) {
+            label += " (likely vision)";
+        }
+        addOption(model.id, label);
+    });
+    if (!select.options.length) {
+        addOption("", "Save settings, then refresh models");
+    }
+    select.value = selectedModel || "";
+}
+
+function setLlmConfigStatus(message, isError) {
+    var el = document.getElementById("llm-config-status");
+    if (!el) return;
+    el.textContent = message || "";
+    el.className = "small " + (isError ? "text-danger" : "text-muted");
 }
 
 // --- Storage stats ---
@@ -639,4 +843,6 @@ document.getElementById("status-filter").addEventListener("change", loadReviews)
 document.getElementById("challenge-filter").addEventListener("change", loadReviews);
 document.addEventListener("keydown", handleImageModalKeydown);
 
-loadReviews();
+loadLlmConfig().then(function() {
+    loadReviews();
+});

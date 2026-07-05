@@ -23,6 +23,7 @@ class ScreenshotChallenge(Challenges):
     submission_points = db.Column(db.Integer, default=0)
     allowed_extensions = db.Column(db.String(256), default="png,jpg,jpeg,gif,bmp,webp")
     max_file_size = db.Column(db.Integer, default=10485760)
+    llm_judge_instructions = db.Column(db.Text, nullable=True)
 
     def __init__(self, *args, **kwargs):
         super(ScreenshotChallenge, self).__init__(**kwargs)
@@ -49,6 +50,11 @@ class ScreenshotSubmission(db.Model):
     )
     review_date = db.Column(db.DateTime, nullable=True)
     review_comment = db.Column(db.Text, nullable=True)
+    llm_score = db.Column(db.Integer, nullable=True)
+    llm_feedback = db.Column(db.Text, nullable=True)
+    llm_model = db.Column(db.String(128), nullable=True)
+    llm_review_date = db.Column(db.DateTime, nullable=True)
+    llm_error = db.Column(db.Text, nullable=True)
     date = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
     submission = db.relationship(
@@ -110,6 +116,7 @@ class ScreenshotChallengeType(BaseChallenge):
                 "submission_points": challenge.submission_points,
                 "allowed_extensions": challenge.allowed_extensions,
                 "max_file_size": challenge.max_file_size,
+                "llm_judge_instructions": challenge.llm_judge_instructions,
             }
         )
         return data

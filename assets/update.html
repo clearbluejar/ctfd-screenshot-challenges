@@ -40,6 +40,16 @@
 	</label>
 	<input type="number" class="form-control" name="max_file_size" value="{{ challenge.max_file_size }}">
 </div>
+
+<div class="form-group">
+	<label>
+		LLM Judge Instructions<br>
+		<small class="form-text text-muted">
+			Private rubric for optional admin-side LLM scoring. Describe exactly what the submitted screenshot should show.
+		</small>
+	</label>
+	<textarea class="form-control" name="llm_judge_instructions" rows="4">{{ challenge.llm_judge_instructions or "" }}</textarea>
+</div>
 {% endblock %}
 
 {% block function %}

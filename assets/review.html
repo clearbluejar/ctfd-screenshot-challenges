@@ -89,7 +89,8 @@
             <a class="navbar-brand" href="/admin">CTFd Admin</a>
             <div>
                 <button class="btn btn-outline-light btn-sm me-2" onclick="showTab('reviews')" id="tab-reviews">Reviews</button>
-                <button class="btn btn-outline-light btn-sm" onclick="showTab('gallery')" id="tab-gallery">Gallery / Storage</button>
+                <button class="btn btn-outline-light btn-sm me-2" onclick="showTab('gallery')" id="tab-gallery">Gallery / Storage</button>
+                <button class="btn btn-outline-light btn-sm" onclick="showTab('llm')" id="tab-llm">LLM Judge</button>
             </div>
         </div>
     </nav>
@@ -167,6 +168,66 @@
             </div>
         </div>
         <div id="gallery-container" class="row g-2"></div>
+    </div>
+
+    <div class="container-fluid p-4" id="llm-panel" style="display:none;">
+        <div class="row g-3">
+            <div class="col-12 col-xl-8">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center justify-content-between mb-3">
+                            <h5 class="mb-0">LLM Judge Settings</h5>
+                            <span id="llm-config-pill" class="badge bg-secondary">Disabled</span>
+                        </div>
+                        <div class="form-check form-switch mb-3">
+                            <input class="form-check-input" type="checkbox" id="llm-enabled">
+                            <label class="form-check-label" for="llm-enabled">Enable LLM scoring controls</label>
+                        </div>
+                        <div class="mb-3">
+                            <label for="llm-base-url" class="form-label">OpenAI-compatible base URL</label>
+                            <input type="url" class="form-control" id="llm-base-url" placeholder="http://localhost:11434/v1">
+                        </div>
+                        <div class="mb-3">
+                            <label for="llm-api-key" class="form-label">API key</label>
+                            <input type="password" class="form-control" id="llm-api-key" autocomplete="off">
+                            <div id="llm-api-key-state" class="form-text"></div>
+                            <div class="form-check mt-2">
+                                <input class="form-check-input" type="checkbox" id="llm-clear-api-key">
+                                <label class="form-check-label" for="llm-clear-api-key">Clear saved API key</label>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="llm-model" class="form-label">Model</label>
+                            <div class="input-group">
+                                <select id="llm-model" class="form-select"></select>
+                                <button type="button" class="btn btn-outline-secondary" onclick="refreshLlmModels()">
+                                    <i class="fas fa-sync-alt"></i> Refresh Models
+                                </button>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="llm-prompt" class="form-label">Judge prompt</label>
+                            <textarea id="llm-prompt" class="form-control" rows="6"></textarea>
+                        </div>
+                        <div class="d-flex align-items-center gap-2">
+                            <button type="button" class="btn btn-primary" onclick="saveLlmConfig()">
+                                <i class="fas fa-save"></i> Save Settings
+                            </button>
+                            <span id="llm-config-status" class="small text-muted"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12 col-xl-4">
+                <div class="card">
+                    <div class="card-body">
+                        <h6>Review Output</h6>
+                        <p class="small text-muted mb-2">Scores and feedback appear only on this admin review page.</p>
+                        <p class="small text-muted mb-0">Use a vision-capable model. Many OpenAI-compatible backends list all models without image capability metadata.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Image Modal -->

@@ -1,12 +1,18 @@
+import base64
 import datetime
+import json
+import mimetypes
 import os
+import re
 
+import requests
 from flask import Blueprint, abort, jsonify, render_template, request, send_file
 from sqlalchemy.exc import IntegrityError
 from werkzeug.utils import safe_join
 
 from CTFd.models import Awards, Challenges, Solves, Submissions, db
 from CTFd.plugins.screenshot_challenges import ScreenshotChallenge, ScreenshotSubmission
+from CTFd.utils import get_config, set_config
 from CTFd.utils.decorators import admins_only, authed_only
 from CTFd.utils.uploads import get_uploader
 from CTFd.utils.user import get_current_team, get_current_user, get_ip
@@ -18,6 +24,20 @@ screenshot_bp = Blueprint(
 )
 
 MAX_SCREENSHOT_UPLOADS = 4
+LLM_CONFIG_PREFIX = "screenshot_challenges_llm_"
+LLM_ENABLED_KEY = LLM_CONFIG_PREFIX + "enabled"
+LLM_BASE_URL_KEY = LLM_CONFIG_PREFIX + "base_url"
+LLM_API_KEY_KEY = LLM_CONFIG_PREFIX + "api_key"
+LLM_MODEL_KEY = LLM_CONFIG_PREFIX + "model"
+LLM_PROMPT_KEY = LLM_CONFIG_PREFIX + "prompt"
+LLM_TIMEOUT_SECONDS = 60
+DEFAULT_LLM_JUDGE_PROMPT = (
+    "You are helping a CTF instructor review screenshot challenge submissions. "
+    "Judge whether the screenshot evidence appears to satisfy the challenge. "
+    "Return only JSON with keys score and feedback. score must be an integer "
+    "from 0 to 100. Keep feedback concise, mention visible evidence, and note "
+    "uncertainty when the screenshot is ambiguous."
+)
 
 
 def _provided_for_locations(locations):
@@ -34,6 +54,173 @@ def _review_group(ss):
         challenge_id=ss.challenge_id,
         user_id=ss.user_id,
     ).all()
+
+
+def _plain_text(value):
+    text = re.sub(r"<[^>]+>", " ", value or "")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _get_llm_config():
+    return {
+        "enabled": bool(get_config(LLM_ENABLED_KEY, default=False)),
+        "base_url": get_config(LLM_BASE_URL_KEY, default="") or "",
+        "api_key": get_config(LLM_API_KEY_KEY, default="") or "",
+        "model": get_config(LLM_MODEL_KEY, default="") or "",
+        "prompt": get_config(LLM_PROMPT_KEY, default=DEFAULT_LLM_JUDGE_PROMPT)
+        or DEFAULT_LLM_JUDGE_PROMPT,
+    }
+
+
+def _public_llm_config():
+    config = _get_llm_config()
+    return {
+        "enabled": config["enabled"],
+        "base_url": config["base_url"],
+        "model": config["model"],
+        "prompt": config["prompt"],
+        "has_api_key": bool(config["api_key"]),
+    }
+
+
+def _openai_api_url(base_url, path):
+    base = (base_url or "").strip().rstrip("/")
+    if not base.endswith("/v1"):
+        base += "/v1"
+    return base + path
+
+
+def _llm_headers(api_key):
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def _provider_error(response):
+    try:
+        data = response.json()
+        if isinstance(data, dict):
+            error = data.get("error")
+            if isinstance(error, dict):
+                return error.get("message") or json.dumps(error)
+            if error:
+                return str(error)
+    except ValueError:
+        pass
+    return response.text[:500]
+
+
+def _model_supports_images(model_data):
+    if not isinstance(model_data, dict):
+        return None
+    text = json.dumps(model_data).lower()
+    model_id = str(model_data.get("id") or "").lower()
+    image_terms = ("image", "vision", "multimodal")
+    model_terms = ("gpt-4o", "o3", "o4", "vision", "llava", "vl", "pixtral", "qwen")
+    if any(term in text for term in image_terms):
+        return True
+    if any(term in model_id for term in model_terms):
+        return True
+    return None
+
+
+def _extract_json_object(text):
+    text = text.strip()
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if fenced:
+        return fenced.group(1)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return text[start:end + 1]
+    return text
+
+
+def _parse_llm_score(content):
+    parsed = json.loads(_extract_json_object(content))
+    raw_score = parsed.get("score")
+    if raw_score is None:
+        raise ValueError("LLM response did not include a score.")
+    score = int(round(float(raw_score)))
+    score = max(0, min(100, score))
+    feedback = parsed.get("feedback") or parsed.get("reason") or ""
+    feedback = str(feedback).strip() or "No feedback returned."
+    return score, feedback
+
+
+def _read_submission_image(ss):
+    if not ss.file_location:
+        raise ValueError("Submission has no image file.")
+    mime_type = mimetypes.guess_type(ss.file_location)[0] or "image/png"
+    uploader = get_uploader()
+    with uploader.open(ss.file_location, "rb") as fp:
+        encoded = base64.b64encode(fp.read()).decode("ascii")
+    return {
+        "type": "image_url",
+        "image_url": {
+            "url": f"data:{mime_type};base64,{encoded}",
+        },
+    }
+
+
+def _score_review_group_with_llm(group, config):
+    first = group[0]
+    challenge = first.challenge
+    judge_instructions = getattr(challenge, "llm_judge_instructions", None) if challenge else None
+    challenge_text = (
+        f"Challenge: {challenge.name if challenge else 'Unknown'}\n"
+        f"Category: {challenge.category if challenge else ''}\n"
+        f"Public description: {_plain_text(challenge.description if challenge else '')}\n"
+        f"Private judge instructions: {_plain_text(judge_instructions) or 'No private rubric provided.'}\n\n"
+        f"Submission contains {len(group)} screenshot(s). Score the submission "
+        "as a whole from 0 to 100."
+    )
+    content = [{"type": "text", "text": challenge_text}]
+    for item in group:
+        if item.file_location:
+            content.append(_read_submission_image(item))
+
+    if len(content) == 1:
+        raise ValueError("Submission has no readable images.")
+
+    payload = {
+        "model": config["model"],
+        "messages": [
+            {"role": "system", "content": config["prompt"]},
+            {"role": "user", "content": content},
+        ],
+        "temperature": 0,
+        "max_tokens": 500,
+    }
+    response = requests.post(
+        _openai_api_url(config["base_url"], "/chat/completions"),
+        headers=_llm_headers(config["api_key"]),
+        data=json.dumps(payload),
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"Provider returned HTTP {response.status_code}: {_provider_error(response)}"
+        )
+    data = response.json()
+    message = data["choices"][0]["message"]["content"]
+    if isinstance(message, list):
+        message = "\n".join(
+            part.get("text", "") for part in message if isinstance(part, dict)
+        )
+    return _parse_llm_score(str(message))
+
+
+def _record_llm_result(group, score=None, feedback=None, model=None, error=None):
+    now = datetime.datetime.utcnow()
+    for item in group:
+        item.llm_score = score
+        item.llm_feedback = feedback
+        item.llm_model = model
+        item.llm_review_date = now
+        item.llm_error = error
+    db.session.commit()
 
 
 def _serialize_review(ss):
@@ -53,6 +240,11 @@ def _serialize_review(ss):
         "reviewer": ss.reviewer.name if ss.reviewer else None,
         "review_date": ss.review_date.isoformat() if ss.review_date else None,
         "review_comment": ss.review_comment,
+        "llm_score": ss.llm_score,
+        "llm_feedback": ss.llm_feedback,
+        "llm_model": ss.llm_model,
+        "llm_review_date": ss.llm_review_date.isoformat() if ss.llm_review_date else None,
+        "llm_error": ss.llm_error,
         "date": ss.date.isoformat() if ss.date else None,
     }
 
@@ -267,6 +459,102 @@ def list_reviews():
     challenge_list = [{"id": c.id, "name": c.name, "category": c.category} for c in challenges]
 
     return jsonify({"data": data, "challenges": challenge_list})
+
+
+@screenshot_bp.route("/plugins/screenshot_challenges/api/llm-config", methods=["GET", "POST"])
+@admins_only
+def llm_config():
+    if request.method == "GET":
+        return jsonify(_public_llm_config())
+
+    data = request.get_json() or {}
+    enabled = bool(data.get("enabled"))
+    base_url = (data.get("base_url") or "").strip()
+    model = (data.get("model") or "").strip()
+    prompt = (data.get("prompt") or "").strip() or DEFAULT_LLM_JUDGE_PROMPT
+    api_key = (data.get("api_key") or "").strip()
+    clear_api_key = bool(data.get("clear_api_key"))
+
+    set_config(LLM_ENABLED_KEY, "true" if enabled else "false")
+    set_config(LLM_BASE_URL_KEY, base_url)
+    set_config(LLM_MODEL_KEY, model)
+    set_config(LLM_PROMPT_KEY, prompt)
+    if clear_api_key:
+        set_config(LLM_API_KEY_KEY, "")
+    elif api_key:
+        set_config(LLM_API_KEY_KEY, api_key)
+
+    return jsonify({"success": True, "config": _public_llm_config()})
+
+
+@screenshot_bp.route("/plugins/screenshot_challenges/api/llm-models")
+@admins_only
+def llm_models():
+    config = _get_llm_config()
+    if not config["base_url"]:
+        return jsonify({"success": False, "message": "LLM base URL is not configured."}), 400
+
+    try:
+        response = requests.get(
+            _openai_api_url(config["base_url"], "/models"),
+            headers=_llm_headers(config["api_key"]),
+            timeout=15,
+        )
+        if response.status_code >= 400:
+            return jsonify({
+                "success": False,
+                "message": f"Provider returned HTTP {response.status_code}: {_provider_error(response)}",
+            }), 502
+        data = response.json()
+    except requests.RequestException as e:
+        return jsonify({"success": False, "message": f"Model request failed: {e}"}), 502
+    except ValueError:
+        return jsonify({"success": False, "message": "Model response was not JSON."}), 502
+
+    models = []
+    for item in data.get("data", []):
+        if isinstance(item, dict):
+            model_id = item.get("id")
+            if model_id:
+                models.append({
+                    "id": model_id,
+                    "supports_images": _model_supports_images(item),
+                })
+        elif item:
+            models.append({"id": str(item), "supports_images": None})
+
+    models.sort(key=lambda m: m["id"])
+    return jsonify({"success": True, "models": models})
+
+
+@screenshot_bp.route("/plugins/screenshot_challenges/api/reviews/<int:review_id>/llm-score", methods=["POST"])
+@admins_only
+def llm_score_review(review_id):
+    config = _get_llm_config()
+    if not config["enabled"]:
+        return jsonify({"success": False, "message": "LLM scoring is disabled."}), 400
+    if not config["base_url"] or not config["model"]:
+        return jsonify({"success": False, "message": "LLM base URL and model are required."}), 400
+
+    ss = ScreenshotSubmission.query.filter_by(id=review_id).first()
+    if not ss:
+        return jsonify({"success": False, "message": "Submission not found."}), 404
+
+    group = _review_group(ss)
+    try:
+        score, feedback = _score_review_group_with_llm(group, config)
+    except Exception as e:
+        error = f"{type(e).__name__}: {e}"
+        _record_llm_result(group, model=config["model"], error=error)
+        return jsonify({"success": False, "message": error}), 502
+
+    _record_llm_result(group, score=score, feedback=feedback, model=config["model"])
+    return jsonify({
+        "success": True,
+        "score": score,
+        "feedback": feedback,
+        "model": config["model"],
+    })
 
 
 @screenshot_bp.route("/plugins/screenshot_challenges/api/reviews/<int:review_id>/approve", methods=["POST"])

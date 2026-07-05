@@ -5,6 +5,7 @@ Run from the CTFd repo root:
     pytest CTFd/plugins/screenshot_challenges/test_screenshot_challenges.py -v
 """
 import io
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -41,7 +42,7 @@ def _award_count(app, user_name="user"):
         return Awards.query.filter_by(user_id=u.id).count()
 
 
-def _make_challenge(app):
+def _make_challenge(app, llm_judge_instructions=None):
     from CTFd.plugins.screenshot_challenges import ScreenshotChallenge
     with app.app_context():
         chal = ScreenshotChallenge(
@@ -52,6 +53,7 @@ def _make_challenge(app):
             type="screenshot",
             state="visible",
             submission_points=PARTIAL,
+            llm_judge_instructions=llm_judge_instructions,
         )
         db.session.add(chal)
         db.session.commit()
@@ -138,6 +140,9 @@ def app():
 
     fake_uploader.upload.side_effect = fake_upload
     fake_uploader.delete.return_value = True
+    fake_uploader.open.side_effect = lambda filename, mode="rb": io.BytesIO(
+        b"\x89PNG\r\n\x1a\nfake"
+    )
 
     with patch(
         "CTFd.plugins.screenshot_challenges.routes.get_uploader",
@@ -289,6 +294,100 @@ def test_review_api_groups_multi_image_attempt_for_admin_reviews(app):
     assert review["image_count"] == 4
     assert len(review["files"]) == 4
     assert len({file["id"] for file in review["files"]}) == 4
+
+
+def test_llm_config_hides_saved_api_key(app):
+    register_user(app)
+    admin = login_as_user(app, name="admin", password="password")
+
+    r = admin.post(
+        "/plugins/screenshot_challenges/api/llm-config",
+        json={
+            "enabled": True,
+            "base_url": "http://llm.local/v1",
+            "api_key": "secret-token",
+            "model": "vision-model",
+            "prompt": "Return JSON.",
+        },
+    )
+    assert r.status_code == 200, r.get_data(as_text=True)
+    data = r.get_json()
+    assert data["success"] is True
+    assert data["config"]["has_api_key"] is True
+    assert "api_key" not in data["config"]
+
+    r = admin.get("/plugins/screenshot_challenges/api/llm-config")
+    assert r.status_code == 200, r.get_data(as_text=True)
+    data = r.get_json()
+    assert data["has_api_key"] is True
+    assert "api_key" not in data
+
+
+def test_llm_score_uses_private_rubric_and_is_admin_only(app):
+    challenge_id = _make_challenge(
+        app,
+        llm_judge_instructions="The screenshot must show nmap scan results with port 22 open.",
+    )
+    register_user(app)
+    user = login_as_user(app)
+    admin = login_as_user(app, name="admin", password="password")
+
+    r = _submit_screenshot(user, challenge_id)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    review_id = _latest_review_id(app, challenge_id)
+
+    r = admin.post(
+        "/plugins/screenshot_challenges/api/llm-config",
+        json={
+            "enabled": True,
+            "base_url": "http://llm.local/v1",
+            "api_key": "secret-token",
+            "model": "vision-model",
+            "prompt": "Return JSON.",
+        },
+    )
+    assert r.status_code == 200, r.get_data(as_text=True)
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "choices": [
+            {
+                "message": {
+                    "content": '{"score": 87, "feedback": "Evidence is visible."}'
+                }
+            }
+        ]
+    }
+    with patch("CTFd.plugins.screenshot_challenges.routes.requests.post", return_value=mock_response) as post:
+        r = admin.post(
+            f"/plugins/screenshot_challenges/api/reviews/{review_id}/llm-score",
+            json={},
+        )
+
+    assert r.status_code == 200, r.get_data(as_text=True)
+    data = r.get_json()
+    assert data["success"] is True
+    assert data["score"] == 87
+
+    call = post.call_args
+    assert call.kwargs["headers"]["Authorization"] == "Bearer secret-token"
+    payload = json.loads(call.kwargs["data"])
+    prompt_text = payload["messages"][1]["content"][0]["text"]
+    assert "Private judge instructions" in prompt_text
+    assert "port 22 open" in prompt_text
+
+    reviews = _reviews_json(admin, grouped=True)
+    review = reviews["data"][0]
+    assert review["llm_score"] == 87
+    assert review["llm_feedback"] == "Evidence is visible."
+    assert review["llm_model"] == "vision-model"
+
+    status = user.get(f"/plugins/screenshot_challenges/api/my-status/{challenge_id}")
+    assert status.status_code == 200, status.get_data(as_text=True)
+    status_data = status.get_json()
+    assert "llm_score" not in status_data
+    assert "llm_feedback" not in status_data
 
 
 def test_upload_more_than_four_screenshots_is_rejected(app):
