@@ -17,6 +17,24 @@ screenshot_bp = Blueprint(
     template_folder="assets",
 )
 
+MAX_SCREENSHOT_UPLOADS = 4
+
+
+def _provided_for_locations(locations):
+    if len(locations) == 1:
+        return f"[screenshot:{locations[0]}]"
+    return f"[screenshots:{','.join(locations)}]"
+
+
+def _review_group(ss):
+    if not ss.submission_id:
+        return [ss]
+    return ScreenshotSubmission.query.filter_by(
+        submission_id=ss.submission_id,
+        challenge_id=ss.challenge_id,
+        user_id=ss.user_id,
+    ).all()
+
 
 @screenshot_bp.route("/plugins/screenshot_challenges/submit", methods=["POST"])
 @authed_only
@@ -40,27 +58,62 @@ def submit_screenshot():
     if solve_query.first():
         return jsonify({"data": {"status": "already_solved", "message": "You have already solved this challenge."}})
 
-    # Replace existing pending submission if one exists
-    pending = ScreenshotSubmission.query.filter_by(
+    files = [f for f in request.files.getlist("file") if f and f.filename]
+    if not files:
+        return jsonify({"data": {"status": "incorrect", "message": "No file uploaded."}}), 400
+    if len(files) > MAX_SCREENSHOT_UPLOADS:
+        return jsonify({"data": {"status": "incorrect", "message": f"You may upload up to {MAX_SCREENSHOT_UPLOADS} images."}}), 400
+
+    allowed = [ext.strip().lower() for ext in challenge.allowed_extensions.split(",")]
+    validated_files = []
+    for file in files:
+        ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+        if ext not in allowed:
+            return jsonify({
+                "data": {
+                    "status": "incorrect",
+                    "message": f"File type '.{ext}' not allowed. Allowed: {', '.join(allowed)}",
+                }
+            }), 400
+
+        file.seek(0, os.SEEK_END)
+        size = file.tell()
+        file.seek(0)
+        if size > challenge.max_file_size:
+            max_mb = challenge.max_file_size / (1024 * 1024)
+            return jsonify({
+                "data": {
+                    "status": "incorrect",
+                    "message": f"File too large. Maximum size: {max_mb:.1f} MB",
+                }
+            }), 400
+        validated_files.append((file, ext))
+
+    # Replace existing pending submissions if any exist
+    pending_list = ScreenshotSubmission.query.filter_by(
         challenge_id=challenge_id,
         user_id=user.id,
         status="pending",
-    ).first()
-    if pending:
-        # Delete old uploaded file
-        if pending.file_location:
-            try:
-                uploader = get_uploader()
-                uploader.delete(filename=pending.file_location)
-            except Exception:
-                pass
-        # Delete old partial credit award
-        if pending.award_id:
-            Awards.query.filter_by(id=pending.award_id).delete()
-        # Delete old submission record
-        if pending.submission_id:
-            Submissions.query.filter_by(id=pending.submission_id).delete()
-        db.session.delete(pending)
+    ).all()
+    if pending_list:
+        uploader = get_uploader()
+        award_ids = set()
+        submission_ids = set()
+        for pending in pending_list:
+            if pending.file_location:
+                try:
+                    uploader.delete(filename=pending.file_location)
+                except Exception:
+                    pass
+            if pending.award_id:
+                award_ids.add(pending.award_id)
+            if pending.submission_id:
+                submission_ids.add(pending.submission_id)
+            db.session.delete(pending)
+        if award_ids:
+            Awards.query.filter(Awards.id.in_(award_ids)).delete(synchronize_session=False)
+        if submission_ids:
+            Submissions.query.filter(Submissions.id.in_(submission_ids)).delete(synchronize_session=False)
         db.session.flush()
 
     rejected_priors = ScreenshotSubmission.query.filter(
@@ -75,60 +128,30 @@ def submit_screenshot():
     if rejected_priors:
         db.session.flush()
 
-    # Validate file
-    file = request.files.get("file")
-    if not file or not file.filename:
-        return jsonify({"data": {"status": "incorrect", "message": "No file uploaded."}}), 400
-
-    # Check extension
-    allowed = [ext.strip().lower() for ext in challenge.allowed_extensions.split(",")]
-    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-    if ext not in allowed:
-        return jsonify({
-            "data": {
-                "status": "incorrect",
-                "message": f"File type '.{ext}' not allowed. Allowed: {', '.join(allowed)}",
-            }
-        }), 400
-
-    # Check file size
-    file.seek(0, os.SEEK_END)
-    size = file.tell()
-    file.seek(0)
-    if size > challenge.max_file_size:
-        max_mb = challenge.max_file_size / (1024 * 1024)
-        return jsonify({
-            "data": {
-                "status": "incorrect",
-                "message": f"File too large. Maximum size: {max_mb:.1f} MB",
-            }
-        }), 400
-
-    # Upload file using CTFd's uploader
     uploader = get_uploader()
-    # Create a unique directory for the upload
     import hashlib
     import time
     hash_prefix = hashlib.md5(
         f"{user.id}-{challenge_id}-{time.time()}".encode()
     ).hexdigest()[:8]
-    safe_filename = f"screenshot.{ext}"
-    location = uploader.upload(file_obj=file, filename=safe_filename, path=hash_prefix)
 
-    # Create a Submissions record (type "partial")
+    uploads = []
+    for index, (file, ext) in enumerate(validated_files):
+        safe_filename = f"screenshot-{index + 1}.{ext}"
+        location = uploader.upload(file_obj=file, filename=safe_filename, path=hash_prefix)
+        uploads.append(location)
+
     submission = Submissions(
         challenge_id=challenge_id,
         user_id=user.id,
         team_id=team.id if team else None,
         ip=get_ip(req=request),
-        provided=f"[screenshot:{location}]",
+        provided=_provided_for_locations(uploads),
         type="partial",
     )
     db.session.add(submission)
     db.session.flush()
 
-    # Create partial credit award if submission_points > 0
-    award = None
     award_id = None
     if challenge.submission_points and challenge.submission_points > 0:
         award = Awards(
@@ -143,21 +166,22 @@ def submit_screenshot():
         db.session.flush()
         award_id = award.id
 
-    # Create ScreenshotSubmission record
-    ss = ScreenshotSubmission(
-        submission_id=submission.id,
-        challenge_id=challenge_id,
-        user_id=user.id,
-        team_id=team.id if team else None,
-        file_location=location,
-        status="pending",
-        award_id=award_id,
-    )
-    db.session.add(ss)
+    for index, location in enumerate(uploads):
+        ss = ScreenshotSubmission(
+            submission_id=submission.id,
+            challenge_id=challenge_id,
+            user_id=user.id,
+            team_id=team.id if team else None,
+            file_location=location,
+            status="pending",
+            award_id=award_id if index == 0 else None,
+        )
+        db.session.add(ss)
+
     db.session.commit()
 
-    msg = "Screenshot submitted!"
-    if challenge.submission_points and challenge.submission_points > 0:
+    msg = f"{len(uploads)} screenshot(s) submitted!"
+    if award_id:
         msg += f" Partial credit ({challenge.submission_points} pts) awarded."
     msg += " Awaiting instructor review."
 
@@ -191,6 +215,7 @@ def list_reviews():
     for ss in submissions:
         data.append({
             "id": ss.id,
+            "submission_id": ss.submission_id,
             "challenge_id": ss.challenge_id,
             "challenge_name": ss.challenge.name if ss.challenge else "Unknown",
             "challenge_category": ss.challenge.category if ss.challenge else "",
@@ -235,13 +260,16 @@ def approve_review(review_id):
     if not challenge:
         return jsonify({"success": False, "message": "Challenge not found."}), 404
 
+    group = _review_group(ss)
+    locations = [item.file_location for item in group if item.file_location]
+
     # Create a Solves record
     solve = Solves(
         user_id=ss.user_id,
         team_id=ss.team_id,
         challenge_id=ss.challenge_id,
         ip="admin-approved",
-        provided=f"[screenshot:{ss.file_location}]",
+        provided=_provided_for_locations(locations),
     )
     try:
         db.session.add(solve)
@@ -251,21 +279,24 @@ def approve_review(review_id):
         return jsonify({"success": False, "message": "User already has a solve for this challenge."}), 400
 
     # Delete the partial credit award (replaced by full solve value)
-    if ss.award_id:
-        Awards.query.filter_by(id=ss.award_id).delete()
-        ss.award_id = None
+    award_ids = {item.award_id for item in group if item.award_id}
+    if award_ids:
+        Awards.query.filter(Awards.id.in_(award_ids)).delete(synchronize_session=False)
 
     # Mark original submission as discard
-    if ss.submission_id:
-        orig_sub = Submissions.query.filter_by(id=ss.submission_id).first()
-        if orig_sub:
+    submission_ids = {item.submission_id for item in group if item.submission_id}
+    if submission_ids:
+        for orig_sub in Submissions.query.filter(Submissions.id.in_(submission_ids)).all():
             orig_sub.type = "discard"
 
-    # Update screenshot submission
-    ss.status = "approved"
-    ss.reviewer_id = admin.id
-    ss.review_date = datetime.datetime.utcnow()
-    ss.review_comment = comment
+    # Update screenshot submissions for the whole uploaded set
+    now = datetime.datetime.utcnow()
+    for item in group:
+        item.award_id = None
+        item.status = "approved"
+        item.reviewer_id = admin.id
+        item.review_date = now
+        item.review_comment = comment
 
     db.session.commit()
 
@@ -289,14 +320,18 @@ def reject_review(review_id):
     else:
         comment = request.form.get("comment", "")
 
-    if ss.award_id:
-        Awards.query.filter_by(id=ss.award_id).delete()
-        ss.award_id = None
+    group = _review_group(ss)
+    award_ids = {item.award_id for item in group if item.award_id}
+    if award_ids:
+        Awards.query.filter(Awards.id.in_(award_ids)).delete(synchronize_session=False)
 
-    ss.status = "rejected"
-    ss.reviewer_id = admin.id
-    ss.review_date = datetime.datetime.utcnow()
-    ss.review_comment = comment
+    now = datetime.datetime.utcnow()
+    for item in group:
+        item.award_id = None
+        item.status = "rejected"
+        item.reviewer_id = admin.id
+        item.review_date = now
+        item.review_comment = comment
 
     db.session.commit()
 

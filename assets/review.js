@@ -1,4 +1,6 @@
 var challengeFilterPopulated = false;
+var currentImageUrl = null;
+var currentDownloadFilename = null;
 
 function loadReviews() {
     var status = document.getElementById("status-filter").value;
@@ -72,8 +74,15 @@ function renderReviews(submissions, status) {
     groupOrder.forEach(function(key) {
         var group = groups[key];
         var pendingIds = [];
+        var pendingKeys = {};
         group.submissions.forEach(function(ss) {
-            if (ss.status === "pending") pendingIds.push(ss.id);
+            if (ss.status === "pending") {
+                var pendingKey = ss.submission_id || ss.id;
+                if (!pendingKeys[pendingKey]) {
+                    pendingIds.push(ss.id);
+                    pendingKeys[pendingKey] = true;
+                }
+            }
         });
 
         // Challenge group header
@@ -117,10 +126,10 @@ function renderReviews(submissions, status) {
             html += '</div>';
 
             // Thumbnail (click to open in modal)
-            html += '<div class="text-center my-2">';
+            html += '<div class="text-center my-2" id="img-container-' + ss.id + '">';
             html += '<img src="' + imgUrl + '" class="screenshot-thumb" ';
-            html += 'onclick="showFullImage(\'' + imgUrl + '\', \'' + escapeHtml(ss.challenge_name) + ' - ' + escapeHtml(ss.user_name) + '\')" ';
-            html += 'onerror="this.style.display=\'none\'">';
+            html += 'onclick="showFullImage(\'' + imgUrl + '\', \'' + escapeHtml(ss.challenge_name) + ' - ' + escapeHtml(ss.user_name) + '\', ' + ss.id + ')" ';
+            html += 'onerror="handleImageLoadError(this, ' + ss.id + ', \'' + imgUrl + '\')">';
             html += '</div>';
 
             // Date
@@ -232,7 +241,36 @@ function batchApprove(ids) {
     });
 }
 
-function showFullImage(url, title) {
+function handleImageLoadError(imgElement, reviewId, imgUrl) {
+    imgElement.style.display = "none";
+    var container = document.getElementById("img-container-" + reviewId);
+    if (container) {
+        var errorDiv = document.createElement("div");
+        errorDiv.className = "image-load-error";
+        errorDiv.innerHTML = '<i class="fas fa-exclamation-triangle"></i>' +
+            '<div>Image failed to load</div>' +
+            '<button class="btn btn-sm btn-primary mt-2" onclick="downloadFile(\'' + imgUrl + '\')">' +
+            '<i class="fas fa-download"></i> Download Original File</button>';
+        container.appendChild(errorDiv);
+    }
+}
+
+function downloadFile(url) {
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = "";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+
+function downloadCurrentImage() {
+    if (currentImageUrl) {
+        downloadFile(currentImageUrl);
+    }
+}
+
+function showFullImage(url, title, reviewId) {
     var img = document.getElementById("modal-image");
     var wrapper = document.getElementById("modal-image-wrapper");
     img.src = url;
@@ -240,6 +278,8 @@ function showFullImage(url, title) {
     img.style.height = "";
     if (wrapper) wrapper.classList.remove("zoomed");
     document.getElementById("imageModalLabel").textContent = title;
+    currentImageUrl = url;
+    currentDownloadFilename = title;
 
     if (wrapper) {
         wrapper.onclick = function() {
