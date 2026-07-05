@@ -129,10 +129,13 @@ function renderReviews(submissions, status) {
             html += '<div class="text-end">';
             html += '<span class="badge bg-' + getBadgeColor(ss.status) + '">' + ss.status.toUpperCase() + '</span>';
             if (files.length > 1) {
-                html += '<span class="badge bg-secondary ms-1">' + files.length + ' images</span>';
+                html += '<span class="badge bg-secondary ms-1">Grouped: ' + files.length + ' images</span>';
             }
             html += '</div>';
             html += '</div>';
+            if (files.length > 1) {
+                html += '<div class="small text-muted mb-2"><i class="fas fa-layer-group"></i> Grouped submission, reviewed as one attempt.</div>';
+            }
 
             // Thumbnails (one review card can contain multiple uploaded images)
             html += '<div class="row g-2 my-2">';
@@ -184,6 +187,10 @@ function renderReviews(submissions, status) {
                 html += '<button class="btn btn-danger btn-sm flex-fill" onclick="rejectReview(' + ss.id + ')">';
                 html += '<i class="fas fa-times"></i> Reject</button>';
                 html += '</div>';
+            } else if (ss.status === "approved") {
+                html += '<hr class="my-2">';
+                html += '<button class="btn btn-warning btn-sm w-100" onclick="reopenReview(' + ss.id + ')">';
+                html += '<i class="fas fa-undo"></i> Reopen Review</button>';
             }
 
             html += '</div></div></div>';
@@ -226,6 +233,28 @@ function rejectReview(id) {
         credentials: "same-origin",
         headers: { "Content-Type": "application/json", "CSRF-Token": CSRF_NONCE },
         body: JSON.stringify({ comment: comment })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(result) {
+        if (result.success) {
+            var card = document.getElementById("review-" + id);
+            if (card) card.classList.add("processed");
+            setTimeout(loadReviews, 300);
+        } else {
+            alert("Error: " + result.message);
+        }
+    })
+    .catch(function(err) { alert("Error: " + err.message); });
+}
+
+function reopenReview(id) {
+    if (!confirm("Reopen this approved submission for review? This removes the solve and returns the submission to Pending.")) return;
+
+    fetch("/plugins/screenshot_challenges/api/reviews/" + id + "/reopen", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "CSRF-Token": CSRF_NONCE },
+        body: JSON.stringify({})
     })
     .then(function(r) { return r.json(); })
     .then(function(result) {

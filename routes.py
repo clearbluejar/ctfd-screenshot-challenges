@@ -368,6 +368,62 @@ def reject_review(review_id):
     return jsonify({"success": True, "message": "Submission rejected. Student can resubmit."})
 
 
+@screenshot_bp.route("/plugins/screenshot_challenges/api/reviews/<int:review_id>/reopen", methods=["POST"])
+@admins_only
+def reopen_review(review_id):
+    ss = ScreenshotSubmission.query.filter_by(id=review_id).first()
+    if not ss:
+        return jsonify({"success": False, "message": "Submission not found."}), 404
+
+    if ss.status != "approved":
+        return jsonify({"success": False, "message": "Can only reopen approved submissions."}), 400
+
+    challenge = ScreenshotChallenge.query.filter_by(id=ss.challenge_id).first()
+    if not challenge:
+        return jsonify({"success": False, "message": "Challenge not found."}), 404
+
+    group = _review_group(ss)
+    award_ids = {item.award_id for item in group if item.award_id}
+    if award_ids:
+        Awards.query.filter(Awards.id.in_(award_ids)).delete(synchronize_session=False)
+
+    solve_query = Solves.query.filter_by(challenge_id=ss.challenge_id, user_id=ss.user_id)
+    if ss.team_id:
+        solve_query = solve_query.filter_by(team_id=ss.team_id)
+    for solve in solve_query.all():
+        db.session.delete(solve)
+
+    submission_ids = {item.submission_id for item in group if item.submission_id}
+    if submission_ids:
+        for orig_sub in Submissions.query.filter(Submissions.id.in_(submission_ids)).all():
+            orig_sub.type = "partial"
+
+    award_id = None
+    if challenge.submission_points and challenge.submission_points > 0:
+        award = Awards(
+            user_id=ss.user_id,
+            team_id=ss.team_id,
+            name=f"Partial: {challenge.name}",
+            description=f"Screenshot submission for {challenge.name}",
+            value=challenge.submission_points,
+            category=challenge.category,
+        )
+        db.session.add(award)
+        db.session.flush()
+        award_id = award.id
+
+    for index, item in enumerate(group):
+        item.award_id = award_id if index == 0 else None
+        item.status = "pending"
+        item.reviewer_id = None
+        item.review_date = None
+        item.review_comment = None
+
+    db.session.commit()
+
+    return jsonify({"success": True, "message": "Submission reopened for review."})
+
+
 @screenshot_bp.route("/plugins/screenshot_challenges/files/<path:filepath>")
 @admins_only
 def serve_screenshot(filepath):

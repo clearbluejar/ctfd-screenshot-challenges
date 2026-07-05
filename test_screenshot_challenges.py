@@ -361,6 +361,43 @@ def test_approving_one_screenshot_approves_whole_multi_image_attempt(app):
         assert Solves.query.count() == 1
 
 
+def test_reopening_approved_multi_image_attempt_removes_solve_and_restores_pending(app):
+    challenge_id = _make_challenge(app)
+    register_user(app)
+    user = login_as_user(app)
+    admin = login_as_user(app, name="admin", password="password")
+
+    r = _submit_screenshots(user, challenge_id, ["proof1.png", "proof2.png"])
+    assert r.status_code == 200, r.get_data(as_text=True)
+    review_id = _latest_review_id(app, challenge_id)
+
+    r = admin.post(
+        f"/plugins/screenshot_challenges/api/reviews/{review_id}/approve",
+        json={"comment": "good"},
+    )
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert _user_score(app) == VALUE
+    assert _award_count(app) == 0
+    with app.app_context():
+        assert Solves.query.count() == 1
+
+    r = admin.post(
+        f"/plugins/screenshot_challenges/api/reviews/{review_id}/reopen",
+        json={},
+    )
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert _user_score(app) == PARTIAL
+    assert _award_count(app) == 1
+
+    submissions = _screenshot_submissions(app, challenge_id)
+    assert {ss.status for ss in submissions} == {"pending"}
+    assert len([ss for ss in submissions if ss.award_id]) == 1
+    with app.app_context():
+        assert Solves.query.count() == 0
+        recorded = Submissions.query.filter_by(id=submissions[0].submission_id).first()
+        assert recorded.type == "partial"
+
+
 def test_rejecting_one_screenshot_rejects_whole_multi_image_attempt(app):
     challenge_id = _make_challenge(app)
     register_user(app)
