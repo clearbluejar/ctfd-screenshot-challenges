@@ -1,4 +1,5 @@
 var challengeFilterPopulated = false;
+var userFilterPopulated = false;
 var currentImageUrl = null;
 var currentDownloadFilename = null;
 var imageGroups = {};
@@ -8,10 +9,14 @@ var currentImageIndex = 0;
 function loadReviews() {
     var status = document.getElementById("status-filter").value;
     var challengeId = document.getElementById("challenge-filter").value;
+    var userId = document.getElementById("user-filter").value;
 
     var url = "/plugins/screenshot_challenges/api/reviews?grouped=1&status=" + encodeURIComponent(status);
     if (challengeId) {
         url += "&challenge_id=" + encodeURIComponent(challengeId);
+    }
+    if (userId) {
+        url += "&user_id=" + encodeURIComponent(userId);
     }
 
     fetch(url, { credentials: "same-origin" })
@@ -29,6 +34,17 @@ function loadReviews() {
                     sel.appendChild(opt);
                 });
                 challengeFilterPopulated = true;
+            }
+
+            if (!userFilterPopulated && result.users) {
+                var userSel = document.getElementById("user-filter");
+                result.users.forEach(function(u) {
+                    var opt = document.createElement("option");
+                    opt.value = u.id;
+                    opt.textContent = u.name;
+                    userSel.appendChild(opt);
+                });
+                userFilterPopulated = true;
             }
         })
         .catch(function(err) {
@@ -637,6 +653,7 @@ function deleteSelected() {
 // --- Init ---
 document.getElementById("status-filter").addEventListener("change", loadReviews);
 document.getElementById("challenge-filter").addEventListener("change", loadReviews);
+document.getElementById("user-filter").addEventListener("change", loadReviews);
 document.addEventListener("keydown", handleImageModalKeydown);
 
 loadReviews();

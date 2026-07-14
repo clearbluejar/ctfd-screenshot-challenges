@@ -49,6 +49,7 @@ class ScreenshotSubmission(db.Model):
     )
     review_date = db.Column(db.DateTime, nullable=True)
     review_comment = db.Column(db.Text, nullable=True)
+    comment_seen = db.Column(db.Boolean, nullable=True, default=False)
     date = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
     submission = db.relationship(

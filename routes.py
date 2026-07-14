@@ -5,7 +5,7 @@ from flask import Blueprint, abort, jsonify, render_template, request, send_file
 from sqlalchemy.exc import IntegrityError
 from werkzeug.utils import safe_join
 
-from CTFd.models import Awards, Challenges, Solves, Submissions, db
+from CTFd.models import Awards, Challenges, Solves, Submissions, Users, db
 from CTFd.plugins.screenshot_challenges import ScreenshotChallenge, ScreenshotSubmission
 from CTFd.utils.decorators import admins_only, authed_only
 from CTFd.utils.uploads import get_uploader
@@ -18,6 +18,19 @@ screenshot_bp = Blueprint(
 )
 
 MAX_SCREENSHOT_UPLOADS = 4
+
+
+def _file_is_zero_filled(file):
+    file.seek(0)
+    while True:
+        chunk = file.read(65536)
+        if not chunk:
+            break
+        if any(chunk):
+            file.seek(0)
+            return False
+    file.seek(0)
+    return True
 
 
 def _provided_for_locations(locations):
@@ -122,6 +135,13 @@ def submit_screenshot():
                 "data": {
                     "status": "incorrect",
                     "message": f"File too large. Maximum size: {max_mb:.1f} MB",
+                }
+            }), 400
+        if size == 0 or _file_is_zero_filled(file):
+            return jsonify({
+                "data": {
+                    "status": "incorrect",
+                    "message": f"File '{file.filename}' appears to be empty or blank. Please upload a real screenshot.",
                 }
             }), 400
         validated_files.append((file, ext))
@@ -238,6 +258,7 @@ def review_page():
 def list_reviews():
     status = request.args.get("status", "pending")
     challenge_id = request.args.get("challenge_id", type=int)
+    user_id = request.args.get("user_id", type=int)
     grouped = request.args.get("grouped") in ("1", "true", "yes")
 
     query = ScreenshotSubmission.query
@@ -245,6 +266,8 @@ def list_reviews():
         query = query.filter_by(status=status)
     if challenge_id:
         query = query.filter_by(challenge_id=challenge_id)
+    if user_id:
+        query = query.filter_by(user_id=user_id)
 
     query = query.order_by(ScreenshotSubmission.date.desc())
     submissions = query.all()
@@ -266,7 +289,17 @@ def list_reviews():
     challenges = ScreenshotChallenge.query.all()
     challenge_list = [{"id": c.id, "name": c.name, "category": c.category} for c in challenges]
 
-    return jsonify({"data": data, "challenges": challenge_list})
+    # And the list of users that have ever submitted, for the user filter dropdown
+    users = (
+        db.session.query(Users.id, Users.name)
+        .join(ScreenshotSubmission, ScreenshotSubmission.user_id == Users.id)
+        .distinct()
+        .order_by(Users.name)
+        .all()
+    )
+    user_list = [{"id": u.id, "name": u.name} for u in users]
+
+    return jsonify({"data": data, "challenges": challenge_list, "users": user_list})
 
 
 @screenshot_bp.route("/plugins/screenshot_challenges/api/reviews/<int:review_id>/approve", methods=["POST"])
@@ -327,6 +360,7 @@ def approve_review(review_id):
         item.reviewer_id = admin.id
         item.review_date = now
         item.review_comment = comment
+        item.comment_seen = False if comment else True
 
     db.session.commit()
 
@@ -362,6 +396,7 @@ def reject_review(review_id):
         item.reviewer_id = admin.id
         item.review_date = now
         item.review_comment = comment
+        item.comment_seen = False if comment else True
 
     db.session.commit()
 
@@ -418,6 +453,7 @@ def reopen_review(review_id):
         item.reviewer_id = None
         item.review_date = None
         item.review_comment = None
+        item.comment_seen = True
 
     db.session.commit()
 
@@ -436,17 +472,44 @@ def serve_screenshot(filepath):
         abort(404)
 
 
+@screenshot_bp.route("/plugins/screenshot_challenges/my-files/<int:submission_id>")
+@authed_only
+def serve_my_screenshot(submission_id):
+    from flask import current_app
+    user = get_current_user()
+    ss = ScreenshotSubmission.query.filter_by(id=submission_id).first()
+    if not ss or ss.user_id != user.id or not ss.file_location:
+        abort(404)
+    upload_folder = current_app.config.get("UPLOAD_FOLDER")
+    try:
+        full_path = safe_join(upload_folder, ss.file_location)
+        return send_file(full_path)
+    except Exception:
+        abort(404)
+
+
 @screenshot_bp.route("/plugins/screenshot_challenges/api/my-pending")
 @authed_only
 def my_pending():
     user = get_current_user()
     submissions = ScreenshotSubmission.query.filter(
         ScreenshotSubmission.user_id == user.id,
-        ScreenshotSubmission.status.in_(["pending", "rejected"]),
+        ScreenshotSubmission.status.in_(["pending", "rejected", "approved"]),
     ).all()
     pending_ids = list(set(ss.challenge_id for ss in submissions if ss.status == "pending"))
     rejected_ids = list(set(ss.challenge_id for ss in submissions if ss.status == "rejected"))
-    return jsonify({"pending": pending_ids, "rejected": rejected_ids})
+    unread_ids = list(set(
+        ss.challenge_id
+        for ss in submissions
+        if ss.status in ("approved", "rejected")
+        and ss.review_comment
+        and not ss.comment_seen
+    ))
+    return jsonify({
+        "pending": pending_ids,
+        "rejected": rejected_ids,
+        "unread_comments": unread_ids,
+    })
 
 
 @screenshot_bp.route("/plugins/screenshot_challenges/api/my-status/<int:challenge_id>")
@@ -459,11 +522,33 @@ def my_status(challenge_id):
     ).order_by(ScreenshotSubmission.date.desc()).first()
     if not ss:
         return jsonify({"status": None})
-    return jsonify({
+
+    # Latest attempt's images so the student can see what they submitted,
+    # even after a rejection. Files may have been bulk-deleted by an admin.
+    group = _review_group(ss)
+    files = [{"id": item.id} for item in group if item.file_location]
+
+    response = {
         "status": ss.status,
         "review_comment": ss.review_comment,
         "date": ss.date.isoformat() if ss.date else None,
-    })
+        "files": files,
+        "missing_files": len(group) - len(files),
+    }
+
+    # Viewing the challenge counts as reading any instructor comments on it
+    unseen = ScreenshotSubmission.query.filter(
+        ScreenshotSubmission.user_id == user.id,
+        ScreenshotSubmission.challenge_id == challenge_id,
+        ScreenshotSubmission.review_comment.isnot(None),
+        ScreenshotSubmission.comment_seen.isnot(True),
+    ).all()
+    if unseen:
+        for item in unseen:
+            item.comment_seen = True
+        db.session.commit()
+
+    return jsonify(response)
 
 
 @screenshot_bp.route("/plugins/screenshot_challenges/api/storage")
