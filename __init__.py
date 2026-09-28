@@ -12,6 +12,17 @@ from CTFd.plugins import (
 )
 from CTFd.plugins.challenges import CHALLENGE_CLASSES, BaseChallenge
 from CTFd.plugins.migrations import upgrade
+
+
+def _assets_version():
+    # Changes whenever an asset changes so browsers don't keep stale JS/CSS
+    assets = os.path.join(os.path.dirname(__file__), "assets")
+    return str(int(max(
+        os.path.getmtime(os.path.join(assets, name)) for name in os.listdir(assets)
+    )))
+
+
+ASSETS_VERSION = _assets_version()
 from CTFd.utils.uploads import delete_file
 
 
@@ -81,9 +92,9 @@ class ScreenshotChallengeType(BaseChallenge):
         "view": "/plugins/screenshot_challenges/assets/view.html",
     }
     scripts = {
-        "create": "/plugins/screenshot_challenges/assets/create.js",
-        "update": "/plugins/screenshot_challenges/assets/update.js",
-        "view": "/plugins/screenshot_challenges/assets/view.js",
+        "create": "/plugins/screenshot_challenges/assets/create.js?v=" + ASSETS_VERSION,
+        "update": "/plugins/screenshot_challenges/assets/update.js?v=" + ASSETS_VERSION,
+        "view": "/plugins/screenshot_challenges/assets/view.js?v=" + ASSETS_VERSION,
     }
     route = "/plugins/screenshot_challenges/assets/"
     blueprint = Blueprint(
@@ -189,5 +200,5 @@ def load(app):
     register_admin_plugin_menu_bar(
         "Screenshot Reviews", "/plugins/screenshot_reviews"
     )
-    register_plugin_script("/plugins/screenshot_challenges/assets/pending.js")
-    register_plugin_stylesheet("/plugins/screenshot_challenges/assets/pending.css")
+    register_plugin_script("/plugins/screenshot_challenges/assets/pending.js?v=" + ASSETS_VERSION)
+    register_plugin_stylesheet("/plugins/screenshot_challenges/assets/pending.css?v=" + ASSETS_VERSION)
