@@ -430,6 +430,10 @@ window.__screenshotSubmit = function(challengeId) {
     return response.json();
   }).then(function(data) {
     window.__clearScreenshot();
+    // Show the just-uploaded images in the status banner right away
+    if (data && data.data && data.data.status === "paused") {
+      window.__loadScreenshotStatus(challengeId);
+    }
     return data;
   });
 };
